@@ -1,0 +1,12 @@
+# 개인정보가 들어 있는 업무 파일은 절대 올리지 않음
+*.xlsx
+*.xls
+*.hwp
+*.hwpx
+*.pdf
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.zip
+~$*
