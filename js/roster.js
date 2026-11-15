@@ -98,10 +98,11 @@
     return { roster, notes, holidays: holidayDays };
   }
 
-  /** 일지 근무자 칸에 들어갈 글자: '홍길동, 김철수 (9시 ~ 18시)' */
-  function staffLines(entry) {
-    const fmt = (s) => (s ? ` ${s.names.join(', ')} (${s.start}시 ~ ${s.end}시)` : '');
-    return { day: fmt(entry?.day), mid: fmt(entry?.mid), night: fmt(entry?.night) };
+  /** 일지 근무자 칸에 들어갈 글자: '홍길동, 김철수 (9시 ~ 18시)' — 형식은 작성 규칙에서 */
+  function staffLines(entry, format) {
+    const fmt = format || '{이름들} ({시작}시 ~ {끝}시)';
+    const one = (s) => (global.Rules ? global.Rules.staffText(fmt, s) : (s ? ` ${s.names.join(', ')} (${s.start}시 ~ ${s.end}시)` : ''));
+    return { day: one(entry?.day), mid: one(entry?.mid), night: one(entry?.night) };
   }
 
   const isRosterFileName = (n) => /근무표/.test(n);

@@ -70,11 +70,13 @@
       try { state.roster = await Roster.parseRoster(state.rosterFile, year, month); }
       catch (e) { state.roster = { error: e.message }; }
     }
+    state.sessions = Step1.buildSessions(state.parsed.flatMap((p) => p.records));   // 규칙 미리보기용
     rebuildMoves();
     renderAll();
   }
 
-  function renderAll() { renderSlots(); renderMoves(); renderCheck(); renderManual(); renderMake(); renderSteps(); }
+  function renderAll() { renderSlots(); renderMoves(); renderCheck(); renderManual(); renderMake(); renderSteps(); if (rulesReady) RulesUI.render(); }
+  let rulesReady = false;
 
   // ── 1. 파일 칸 ──────────────────────────────────────────
   function slot(id, icon, title, status, ex, body, need) {
@@ -318,7 +320,7 @@
       const residents = await Step1.residentsFromBuffer(state.result.buffer);
       const tpl = logTemplate();
       const roster = state.roster && !state.roster.error ? state.roster.roster : null;
-      const res = await Step2.buildLog(tpl.file, state.result.sessions, residents, year, month, { roster });
+      const res = await Step2.buildLog(tpl.file, state.result.sessions, residents, year, month, { roster, rules: RulesUI.rules });
       state.result2 = res;
       const url = URL.createObjectURL(res.blob);
       const sample = res.summary.find((s) => s.lines > 0) || res.summary[0];
@@ -379,6 +381,13 @@
     $('#make1').addEventListener('click', () => { if (!blockIfNotReady()) { $('#msg').innerHTML = ''; run().catch(() => {}); } });
     $('#make2').addEventListener('click', () => { if (!blockIfNotReady()) { $('#msg').innerHTML = ''; run2().catch(() => {}); } });
     $('#makeAll').addEventListener('click', runAll);
+    RulesUI.init({
+      getSessions: () => state.sessions || [],
+      getRoster: () => (state.roster && !state.roster.error ? state.roster.roster : null),
+      getYM: ym,
+      onChange: () => { state.result2 = null; $('#res2').innerHTML = ''; renderMake(); renderSteps(); },   // 규칙이 바뀌면 일지는 다시 만들어야 함
+    });
+    rulesReady = true;
     renderAll();
   }
 

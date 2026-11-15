@@ -4,109 +4,12 @@
   'use strict';
   const HP = 'http://www.hancom.co.kr/hwpml/2011/paragraph';
 
-  // ── 설정: 서비스 → 일지 영역 ───────────────────────────────
-  const SECTION_OF = {
-    보호사업: ['활동관련비용지원', '이미용서비스', '건강검진', '건강관리', '의약품·의약외품', '진단및치료', '영양제지원', '가족회의', '오!해피데이', '생활안전교육', '법률구제지원'],
-    교육지원: ['검정고시', '기초학습', '학업지원', '학업관련비용지원', '특기적성교육지원', '검정고시학업지원', '인성교육', '인권교육', '약물중독예방', '도박중독예방교육', '생명존중교육', '성교육'],
-    자립지원: ['취업', '홀로서기', '직업여행기', '이미지메이킹', '자립지원교육', '우리가주인', '집밥요리교실', '가정복귀지원'],
-    상담정서지원: ['개인상담-대면', '개인상담-전화', '개인상담-사이버', '개인상담-외부기관', '가족상담', '심리검사', '연극치료', '집단미술치료', '인터넷중독예방', '너,나우리집단상담', '마음놀이터', '반갑다친구야'],
-    청소년활동지원: ['신나는문화콘서트', '우리함께놀자', '청춘여행기', '멘토링', '우리들의기념일', '가족여행', '계절나들이', '체육활동'],
-  };
-  // 일지에 쓸 때 앞에 붙이는 이름 (제목에 이미 '○○_' 가 있으면 제목 그대로 씀)
-  const LABEL = {
-    '의약품·의약외품': '의약품 지원', '진단및치료': '진단 및 치료', '이미용서비스': '이미용 서비스', '활동관련비용지원': '',
-    '학업지원': '', '특기적성교육지원': '특기적성 교육지원', '검정고시학업지원': '검정고시 학습지도', '취업': '출근지도',
-  };
-  // 매일 반복이라 일지에 안 쓰는 서비스
-  const SKIP = new Set(['우리가주인']);
-  // 정해진 문장으로 쓰는 서비스
-  const FIXED = { '영양제지원': '영양제 지급 - 입소생들의 영양균형 및 성장을 위해 유산균 및 멀티 비타민 제공' };
-  // 내용을 비우는 칸 (개인 파일에 없는 정보 — 직접 입력)
-  const CLEAR_ROWS = ['대외지원', '후원'];
-
-  const keyToSection = {};
-  for (const [sec, keys] of Object.entries(SECTION_OF)) keys.forEach((k) => (keyToSection[k] = sec));
   const DOW = ['일', '월', '화', '수', '목', '금', '토'];
   const pad2 = (n) => String(n).padStart(2, '0');
   const ord = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
   const svcDisplay = (svc) => svc.replace(/^\(공통서비스\)_/, '');
   const clean = (t) => String(t || '').replace(/\s+/g, ' ').trim();
 
-  function itemText(s) {
-    const t = clean(s.title);
-    const label = s.key in LABEL ? LABEL[s.key] : svcDisplay(s.svc);
-    const u = t.indexOf('_');
-    if (u > 0 && u <= 15) return t;                        // '기초학습_…', '홀로서기_…' 처럼 이미 머리말이 있음
-    if (!label || t.replace(/\s/g, '').startsWith(label.replace(/\s/g, ''))) return t;
-    return `${label}_${t}`;
-  }
-  // 상담 대상: '영원중학교 담임선생님_조퇴 건' → '영원중학교 담임선생님'
-  function target(title) {
-    const t = clean(title).replace(/^\(외부기관\s*상담\)\s*/, '');
-    const m = t.split(/_| - | – /)[0].trim();
-    return m || t;
-  }
-
-  /** '홀로서기_A', '홀로서기_B' → '홀로서기_A, B' (같은 머리말이 이어지면 한 번만) */
-  function joinItems(items) {
-    let prev = null;
-    return items.map((it) => {
-      const m = it.match(/^([^_]{1,15})_(.+)$/);
-      const head = m ? m[1] : null;
-      const s = head && head === prev ? m[2] : it;
-      prev = head;
-      return s;
-    }).join(', ');
-  }
-
-  /** 하루치 회기 → 영역별 문장 */
-  function dayLines(daySessions) {
-    const out = { 보호사업: [], 교육지원: [], 자립지원: [], 상담정서지원: [], 청소년활동지원: [], 기타사업: [] };
-    const unknown = new Set();
-    const list = [...daySessions].sort((a, b) => ord(a.time, b.time));
-    const personItems = {}; // section -> Map(name -> [items])
-    const groupLines = {};
-    const counsel = { 가족상담: new Map(), 대면: [], 전화: new Map(), 사이버: new Map(), 외부기관: new Map() };
-    const addPerson = (sec, name, text) => {
-      const m = (personItems[sec] ||= new Map());
-      if (!m.has(name)) m.set(name, []);
-      if (!m.get(name).includes(text)) m.get(name).push(text);
-    };
-    for (const s of list) {
-      if (SKIP.has(s.key)) continue;
-      let sec = keyToSection[s.key];
-      if (!sec) { sec = '기타사업'; unknown.add(s.key); }
-      if (FIXED[s.key]) { if (!out[sec].includes(` * ${FIXED[s.key]}`)) out[sec].push(` * ${FIXED[s.key]}`); continue; }
-      const people = s.people || [s.name];
-      if (s.key === '가족상담') { const t = target(s.title); counsel.가족상담.set(t, (counsel.가족상담.get(t) || 0) + 1); continue; }
-      if (s.key === '개인상담-대면') { if (!counsel.대면.includes(s.name)) counsel.대면.push(s.name); continue; }
-      const kind = { '개인상담-전화': '전화', '개인상담-사이버': '사이버', '개인상담-외부기관': '외부기관' }[s.key];
-      if (kind) {
-        const m = counsel[kind]; if (!m.has(s.name)) m.set(s.name, { targets: [], n: 0 });
-        const e = m.get(s.name); e.n++; const t = target(s.title); if (!e.targets.includes(t)) e.targets.push(t);
-        continue;
-      }
-      if (people.length > 1) (groupLines[sec] ||= []).push(` * ${itemText(s)} (${people.length}명)`);
-      else addPerson(sec, people[0], itemText(s));
-    }
-    // 상담정서지원 머리 줄
-    const c = [];
-    if (counsel.가족상담.size) c.push(` * 가족상담 – ${[...counsel.가족상담].map(([t, n]) => (n > 1 ? `${t}(${n}회)` : t)).join(', ')}`);
-    if (counsel.대면.length) c.push(` * 대면상담 – ${counsel.대면.join(', ')}`);
-    for (const [kind, label] of [['전화', '전화상담'], ['사이버', '사이버상담'], ['외부기관', '외부기관상담']]) {
-      if (!counsel[kind].size) continue;
-      c.push(` * ${label} – ${[...counsel[kind]].map(([name, e]) => {
-        const ts = e.targets.filter((t) => t !== name);          // 본인과 한 상담이면 대상 대신 이름만
-        return ts.length ? `${ts.join(', ')}(${name}${e.n > 1 ? ` ${e.n}회` : ''})` : `${name}${e.n > 1 ? `(${e.n}회)` : ''}`;
-      }).join(', ')}`);
-    }
-    out.상담정서지원.push(...c);
-    for (const sec of Object.keys(out)) {
-      out[sec].push(...(groupLines[sec] || []));
-      for (const [name, items] of personItems[sec] || []) out[sec].push(` * ${name} – ${joinItems(items)}`);
-    }
-    return { lines: out, unknown: [...unknown] };
-  }
 
   // ── XML 도우미 ─────────────────────────────────────────────
   const kids = (el, name) => [...el.children].filter((e) => e.localName === name);
@@ -183,8 +86,9 @@
         .replace(/퇴소\s*:\s*\d+(\([^)]*\))?/, `퇴소 : ${who(info.leaveNames)}`));
     } else warn.push('입소생 칸을 찾지 못함');
 
-    const sections = [['보호사업', '보호사업'], ['교육지원', '교육지원'], ['자립지원', '자립지원'], ['상담정서지원', '상담정서지원'], ['청소년활동지원', '청소년활동지원'], ['기타사업', '기타사업']];
-    for (const [lab, key] of sections) {
+    // 대외지원·후원은 개인 파일에 없어서 '직접 넣는 내용'만 들어감(없으면 비움)
+    for (const lab of global.Rules.EXTRA_SECTIONS) {
+      const key = lab;
       const L = label(lab);
       if (!L) { if (info.lines[key]?.length) warn.push(`'${lab}' 칸을 찾지 못해 ${info.lines[key].length}줄을 못 넣음`); continue; }
       const content = at(L.row + L.rs - 1, 1);
@@ -194,10 +98,6 @@
           for (const p of x.ps) if (/\d+\s*명/.test(textOf(p))) setParaText(p, textOf(p).replace(/\d+(\s*명)/, `${info.residents.length}$1`));
       }
       setCellLines(content, info.lines[key] || [], fallbackTpl);
-    }
-    for (const lab of CLEAR_ROWS) {
-      const L = label(lab); const content = L && at(L.row + L.rs - 1, 1);
-      if (content) setCellLines(content, [], fallbackTpl);
     }
     const SL = label('근무자');
     if (SL && (info.clearStaff || info.staff)) {
@@ -276,6 +176,7 @@
 
   /** 운영일지 만들기 */
   async function buildLog(hwpxFile, sessions, residents, year, month, opts = {}) {
+    const rules = opts.rules || global.Rules.load();
     const zip = await JSZip.loadAsync(await hwpxFile.arrayBuffer());
     const secPath = Object.keys(zip.files).filter((n) => /^Contents\/section\d+\.xml$/i.test(n)).sort()[0];
     if (!secPath) throw new Error('hwpx 안에서 본문(section0.xml)을 찾지 못했어요. 한글에서 .hwpx로 저장한 파일인지 확인해 주세요.');
@@ -336,7 +237,7 @@
       const dow = DOW[new Date(year, month - 1, d).getDay()];
       if (g.dateP) setParaText(g.dateP, textOf(g.dateP).replace(/\d{4}\s*년(\s*)\d{1,2}\s*월(\s*)\d{1,2}\s*일(\s*)\S\s*요일/, `${year}년$1${month}월$2${d}일$3${dow}요일`));
       const daySessions = byDate.get(ds) || [];
-      const { lines, unknown } = dayLines(daySessions);
+      const { lines, unknown } = global.Rules.dayLines(daySessions, rules, ds);
       unknown.forEach((u) => unknownAll.add(u));
       const info = {
         residents: residentsOn(residents, ds, daySessions), lines,
@@ -345,12 +246,12 @@
       };
       info.admit = info.admitNames.length; info.leave = info.leaveNames.length;
       info.clearStaff = !!opts.clearStaff;
-      if (opts.roster) info.staff = global.Roster.staffLines(opts.roster[ds]);
+      if (opts.roster) info.staff = global.Roster.staffLines(opts.roster[ds], rules.staffLine);
       const w = fillDay(g.tbl, info, fallbackTpl);
       w.forEach((x) => notes.push(`${d}일: ${x}`));
       summary.push({ date: ds, dow, residents: info.residents.length, lines: Object.values(lines).reduce((a, l) => a + l.length, 0), info });
     });
-    if (unknownAll.size) notes.push(`일지 영역이 정해지지 않은 서비스는 '기타사업'에 넣었어요: ${[...unknownAll].join(', ')}`);
+    if (unknownAll.size) notes.push(`작성 규칙에 없는 서비스는 '기타사업'에 넣었어요: ${[...unknownAll].join(', ')} — 「운영일지 작성 규칙」에서 정해 주세요`);
 
     const outXml = decl + new XMLSerializer().serializeToString(doc).replace(/^<\?xml[^>]*\?>\s*/, '');
     // 다시 압축: mimetype 은 맨 앞, 압축 없이
@@ -366,5 +267,5 @@
     return { blob, notes, summary, fileName: `쉼터운영일지 ${year} ${month}월.hwpx` };
   }
 
-  global.Step2 = { buildLog, dayLines, SECTION_OF, LABEL, SKIP, FIXED };
+  global.Step2 = { buildLog };
 })(window);

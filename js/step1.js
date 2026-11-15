@@ -27,6 +27,50 @@
   const SUMMARY_SHEET = '실적 정리';
   const RESIDENT_SHEET = '이용자현황';
 
+  // ── 줄 번호 대신 항목 이름(B열 프로그램명 / C열 자원제공서비스)으로 찾기 ──
+  // 위 번호는 이름으로 못 찾을 때만 쓰는 예비값. 이름이 서비스 키와 다른 것만 따로 적음.
+  const ROW_ALIAS = {
+    '개인상담-대면': [{ c: '대면상담' }], '개인상담-전화': [{ c: '전화상담' }], '개인상담-사이버': [{ c: '사이버상담' }],
+    '개인상담-외부기관': [{ c: '외부기관상담' }], '진단및치료-정신과': [{ b: '진단및치료-정신과진료' }], '멘토링': [{ b: '멘토링' }],
+  };
+  const MANUAL_SPEC = {
+    58: [{ b: '슈퍼비전' }], 59: [{ b: '사후관리' }],
+    61: [{ b: '지역사회', c: '참여청소년' }], 62: [{ b: '지역사회', c: '청소년상담' }], 63: [{ b: '지역사회', c: '아웃리치프로그램' }],
+    64: [{ b: '서울시연합' }], 65: [{ b: '학교' }], 66: [{ b: '사이버아웃리치' }],
+    77: [{ b: '홍보사업' }], 78: [{ b: '지역사회연계' }], 79: [{ b: '자원봉사자관리' }],
+  };
+  const normLabel = (s) => String(s || '').replace(/^\(공통서비스\)_/, '').replace(/\s/g, '');
+
+  /** 실적 정리 시트에서 서비스 키 → 줄 번호, 수기 항목 → 줄 번호를 이름으로 찾음 */
+  function resolveRows(ss, month) {
+    const cS = 8 + 2 * (month - 1);
+    const rows = [];
+    for (let r = 3; r <= ss.rowCount; r++) {
+      const R = ss.getRow(r);
+      // 소계 줄(이번 달 칸에 수식)은 제외 — 병합 칸은 수식으로 보지 않음
+      rows.push({ r, b: normLabel(cellText(R.getCell(2).value)), c: normLabel(cellText(R.getCell(3).value)), sub: typeof R.getCell(cS).formula === 'string' });
+    }
+    const match = (x, s) => !x.sub && (!s.c || x.c === s.c) && (!s.b || x.b === s.b);
+    const find = (specs) => {                 // 앞에 적은 조건부터 차례로 (C열 일치가 먼저)
+      for (const s of specs) { const hit = rows.find((x) => match(x, s)); if (hit) return hit.r; }
+      return null;
+    };
+    const notes = [];
+    const svc = {};
+    for (const [row, key] of Object.entries(ROW_MAP)) {
+      const specs = ROW_ALIAS[key] || [{ c: key }, { b: key }];
+      const r = find(specs);
+      svc[key] = r || Number(row);
+      if (!r) notes.push(`'실적 정리'에서 '${key}' 항목을 이름으로 찾지 못해 ${row}행에 넣었어요 — 확인해 주세요`);
+    }
+    const manual = MANUAL_ROWS.map((m) => {
+      const r = find(MANUAL_SPEC[m.row] || []);
+      if (!r) notes.push(`'실적 정리'에서 '${m.label}' 항목을 이름으로 찾지 못해 ${m.row}행을 썼어요 — 확인해 주세요`);
+      return { ...m, row: r || m.row };
+    });
+    return { svc, manual, notes };
+  }
+
   const svcKey = (s) => s.replace(/^\(공통서비스\)_/, '').replace(/\s/g, '');
   const pad2 = (n) => String(n).padStart(2, '0');
   const ordinal = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
@@ -185,7 +229,9 @@
     const ss = wb.getWorksheet(SUMMARY_SHEET);
     if (ss) {
       const cS = 8 + 2 * (month - 1);
-      for (const m of MANUAL_ROWS) {
+      const rr = resolveRows(ss, month);
+      info.rowNotes = rr.notes;
+      for (const m of rr.manual) {
         const a = ss.getRow(m.row).getCell(cS), b = ss.getRow(m.row).getCell(cS + 1);
         info.manual.push({ ...m, sessions: hasFormula(a) ? null : cellText(a.value), persons: hasFormula(b) ? null : cellText(b.value),
           sessionsIsFormula: hasFormula(a), personsIsFormula: hasFormula(b) });
@@ -406,7 +452,9 @@
       const cS = 8 + 2 * (month - 1);
       // 소계·합계 칸: 1월 열(H·I)에 수식이 있는데 이번 달 칸에 수식이 없으면(누가 숫자로 덮어씀) 같은 모양의 수식으로 되돌림
       const colL = (n) => { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; };
-      const mappedRows = new Set(Object.keys(ROW_MAP).map(Number));
+      const rr = resolveRows(ss, month);
+      notes.push(...rr.notes);
+      const mappedRows = new Set(Object.values(rr.svc));
       for (let r = 4; r <= ss.rowCount; r++) {
         if (mappedRows.has(r)) continue;
         for (const [src, dst] of [[8, cS], [9, cS + 1]]) {
@@ -425,9 +473,9 @@
         if (!hasFormula(R.getCell(4))) R.getCell(4).value = a;   // 당월 D
         if (!hasFormula(R.getCell(5))) R.getCell(5).value = b;   // 당월 E
       };
-      for (const [row, k] of Object.entries(ROW_MAP)) {
+      for (const [k, row] of Object.entries(rr.svc)) {
         const v = agg[k] || [0, 0];
-        put(Number(row), v[0], v[1]);
+        put(row, v[0], v[1]);
       }
       for (const m of manualValues || []) {
         const num = (x) => (x === '' || x == null ? null : Number(x));
