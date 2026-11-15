@@ -342,7 +342,7 @@
       if (ex) { setIfBlank(ex.row, L.age, mv.age); setIfBlank(ex.row, L.cause, mv.cause); setIfBlank(ex.row, L.school, mv.school); continue; }
       const prev = R.left[R.left.length - 1];
       const r = R.lastLeft + 1;
-      copyRowStyle(rs, R.lastLeft, r, L.month, L.period);
+      if (R.lastLeft > R.hdr) copyRowStyle(rs, R.lastLeft, r, L.month, L.period);   // 빈 표면 머리글 서식은 복사하지 않음
       const row = rs.getRow(r);
       row.getCell(L.no).value = (prev?.no || 0) + 1;
       row.getCell(L.in).value = toDate(mv.date);
@@ -373,7 +373,7 @@
       else {
         const prev = R.right[R.right.length - 1];
         const r = R.lastRight + 1;
-        copyRowStyle(rs, R.lastRight, r, Rt.no, Math.max(Rt.out, Rt.reason, Rt.indep));
+        if (R.lastRight > R.hdr) copyRowStyle(rs, R.lastRight, r, Rt.no, Math.max(Rt.out, Rt.reason, Rt.indep));
         const row = rs.getRow(r);
         row.getCell(Rt.no).value = (prev?.no || 0) + 1;
         row.getCell(Rt.name).value = mv.name;
@@ -468,6 +468,8 @@
     const unmapped = [];
     if (ss) {
       ss.getCell('B2').value = `${year}년 ${month}월 안전망 실적`;
+      const f2 = ss.getCell('F2');                       // 연도 칸 (숫자일 때만)
+      if (/^\d{4}$/.test(cellText(f2.value).trim()) && !hasFormula(f2)) f2.value = typeof f2.value === 'number' ? year : String(year);
       const cS = 8 + 2 * (month - 1);
       // 소계·합계 칸: 1월 열(H·I)에 수식이 있는데 이번 달 칸에 수식이 없으면(누가 숫자로 덮어씀) 같은 모양의 수식으로 되돌림
       const colL = (n) => { let s = ''; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; };
@@ -510,6 +512,41 @@
     return { buffer, lineCount: sessions.length, groupCount, unmapped, notes, fileName: `${year}년 ${month}월 안전망 실적.xlsx` };
   }
 
+  /**
+   * 실적 파일을 빈 양식으로: 목록·날짜순 시트 내용, '실적 정리'의 숫자(수식은 그대로)를 비움.
+   * clearResidents=true 이면 이용자현황 명단도 비움(내장 양식용), false 면 명단은 남김(새해 시작용).
+   */
+  async function blankTemplate(file, { clearResidents = false, name = '빈 안전망 실적.xlsx' } = {}) {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(await file.arrayBuffer());
+    for (const w of [...wb.worksheets]) if (/안전망 실적\s*\(\d+\)\s*$|_날짜순정렬$/.test(w.name)) wb.removeWorksheet(w.id);
+    const list = wb.worksheets.find((w) => /안전망 실적$/.test(w.name)) || wb.worksheets[0];
+    if (list) {
+      list.name = '안전망 실적';
+      for (let r = 4; r <= list.rowCount; r++) for (let c = 1; c <= 8; c++) {
+        const cell = list.getRow(r).getCell(c); cell.value = null; if (r > 4) cell.style = {};
+      }
+    }
+    const ss = wb.getWorksheet(SUMMARY_SHEET);
+    if (ss) for (let r = 4; r <= ss.rowCount; r++) for (let c = 4; c <= 31; c++) {
+      const cell = ss.getRow(r).getCell(c);
+      if (!hasFormula(cell) && typeof cell.value === 'number') cell.value = null;
+    }
+    const rs = wb.getWorksheet(RESIDENT_SHEET);
+    if (rs && clearResidents) {
+      const R = readResidents(rs);
+      if (R) {
+        for (const m of Object.keys(rs._merges || {})) {          // 명단 쪽 병합(월 표시) 풀기
+          const top = Number(String(rs._merges[m].range || m).replace(/^[A-Z]+/, '').split(':')[0]);
+          if (rs._merges[m].top > R.hdr || top > R.hdr) rs.unMergeCells(rs._merges[m].range || m);
+        }
+        for (let r = R.hdr + 1; r <= rs.rowCount; r++) rs.getRow(r).eachCell({ includeEmpty: true }, (cell) => { cell.value = null; });
+      }
+    }
+    wb.calcProperties = { ...(wb.calcProperties || {}), fullCalcOnLoad: true };
+    return new File([await wb.xlsx.writeBuffer()], name);
+  }
+
   /** 만들어진 실적 엑셀에서 이용자현황(입소일·퇴소일) 읽기 — 운영일지 재소 인원 계산용 */
   async function residentsFromBuffer(buffer) {
     const wb = new ExcelJS.Workbook();
@@ -519,6 +556,6 @@
     return R ? R.left.map((e) => ({ name: e.name, inDate: e.inDate, end: e.end })) : [];
   }
 
-  global.Step1 = { residentsFromBuffer, isNamedPersonalFile, peekMonths, ROW_MAP, MANUAL_ROWS, parsePersonalName, isSummaryFileName, readPersonal, buildSessions, aggregate,
+  global.Step1 = { residentsFromBuffer, blankTemplate, isNamedPersonalFile, peekMonths, ROW_MAP, MANUAL_ROWS, parsePersonalName, isSummaryFileName, readPersonal, buildSessions, aggregate,
     buildListLines, inspectTemplate, buildWorkbook, detectMoves, cellText };
 })(window);

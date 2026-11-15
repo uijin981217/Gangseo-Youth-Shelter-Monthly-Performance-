@@ -76,7 +76,8 @@
       catch (e) { r = { person: raw ? '' : Step1.parsePersonalName(f.name).person, records: [], warnings: [`[${f.name}] 읽지 못함: ${e.message}`] }; }
       state.parsed.push(Object.assign(r, { file: f, id: fileId(f), raw }));
     }
-    const tpl = state.templates[state.templateIdx];
+    state.tpl = await summaryTemplate(year, month);
+    const tpl = state.tpl.file;
     state.info = null;
     if (tpl) {
       try { state.info = await Step1.inspectTemplate(tpl, year, month); }
@@ -88,6 +89,47 @@
       catch (e) { state.roster = { error: e.message }; }
     }
     afterNames();
+  }
+
+  // ── 안전망 실적 양식: 넣은 파일 → 기억된 실적 → 내장 빈 양식 ──
+  // 사이트가 실적을 만들 때마다 이 PC 브라우저에 복사본을 기억해 두고, 다음 달 바탕으로 씀
+  const MEM_KEY = 'shelter-summary-memory-v1';
+  const ymKey = (y, m) => `${y}-${String(m).padStart(2, '0')}`;
+  const b64ToFile = (b64, name) => { const bin = atob(b64); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return new File([u], name); };
+  function memLoad() { try { return JSON.parse(localStorage.getItem(MEM_KEY) || '{}') || {}; } catch { return {}; } }
+  function memSave(y, m, buffer) {
+    try {
+      const mem = memLoad();
+      let bin = ''; const u = new Uint8Array(buffer); for (let i = 0; i < u.length; i += 0x8000) bin += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+      mem[ymKey(y, m)] = { b64: btoa(bin), savedAt: new Date().toISOString() };
+      for (const k of Object.keys(mem).sort().slice(0, -3)) delete mem[k];      // 최근 3달만
+      localStorage.setItem(MEM_KEY, JSON.stringify(mem));
+      return true;
+    } catch { return false; }
+  }
+  function memForget() { try { localStorage.removeItem(MEM_KEY); } catch { /* 무시 */ } }
+
+  async function summaryTemplate(year, month) {
+    if (state.templates.length) {
+      const f = state.templates[state.templateIdx];
+      return { file: f, kind: 'upload', label: f.name };
+    }
+    const target = ymKey(year, month), mem = memLoad();
+    const keys = Object.keys(mem).filter((k) => k <= target).sort();
+    if (keys.length) {
+      const prev = ymKey(month === 1 ? year - 1 : year, month === 1 ? 12 : month - 1);
+      const k = keys.includes(prev) ? prev : keys.filter((x) => x < target).pop() || keys.pop();
+      const [ky, km] = k.split('-').map(Number);
+      let file = b64ToFile(mem[k].b64, `${ky}년 ${km}월 안전망 실적(기억).xlsx`);
+      const notes = [];
+      if (ky < year) {            // 새해: 숫자는 비우고 이용자현황만 이어 씀
+        file = await Step1.blankTemplate(file, { clearResidents: false, name: `${year}년 새 안전망 실적.xlsx` });
+        notes.push(`새해라 '실적 정리' 숫자를 비우고 시작해요. 이용자현황은 ${ky}년 것을 이어 써요.`);
+      } else if (k !== prev && k !== target) notes.push(`기억된 마지막 실적이 ${km}월 것이에요. 그 사이 달 실적은 없어요.`);
+      return { file, kind: 'memory', label: `${ky}년 ${km}월 실적 (이 PC가 기억)`, notes };
+    }
+    return { file: b64ToFile(window.SUMMARY_TEMPLATE_B64 || '', '빈 안전망 실적.xlsx'), kind: 'builtin', label: '내장 빈 양식',
+      notes: ['처음이라 이용자현황(입소생 명단)이 비어 있어요. 지난달 실적 파일을 한 번 넣어 주면 명단을 가져와요.'] };
   }
 
   // ── 이름 없는 원본 파일: 추천 + 사람이 고른 이름 반영 ─────
@@ -141,10 +183,14 @@
 
     const t = state.templates;
     const tplName = t[state.templateIdx]?.name || '';
-    const kind = !t.length ? badge('mute', '필요') : new RegExp(`0?${month}\\s*월`).test(tplName) ? badge('ok', '이번 달 파일') : badge('ok', '지난달 파일');
-    slot('#slotSummary', ICON.sheet, '안전망 실적', kind, `예: 2026년 n월 안전망 실적.xlsx (지난달 것)`,
-      t.length > 1 ? t.map((f, i) => `<label class="pick"><input type="radio" name="tpl" value="${i}" ${i === state.templateIdx ? 'checked' : ''}> ${esc(f.name)}</label>`).join('')
-        : t.length ? `${esc(tplName)} <button class="x" title="빼기" data-rm-t="0">×</button>` : '', !t.length);
+    const tk = state.tpl?.kind;
+    const kind = tk === 'upload' ? (new RegExp(`0?${month}\\s*월`).test(tplName) ? badge('ok', '이번 달 파일') : badge('ok', '지난달 파일'))
+      : tk === 'memory' ? badge('ok', '기억된 실적 사용') : badge('mute', '선택 · 내장 양식');
+    const tplNotes = (state.tpl?.notes || []).map((n) => `<div class="${tk === 'builtin' ? 'muted' : 'warn'} small">${esc(n)}</div>`).join('');
+    slot('#slotSummary', ICON.sheet, '안전망 실적', kind, '없어도 돼요 — 지난번에 만든 실적을 이 PC가 기억해서 써요',
+      (t.length > 1 ? t.map((f, i) => `<label class="pick"><input type="radio" name="tpl" value="${i}" ${i === state.templateIdx ? 'checked' : ''}> ${esc(f.name)}</label>`).join('')
+        : t.length ? `${esc(tplName)} <button class="x" title="빼기" data-rm-t="0">×</button>`
+        : `${esc(state.tpl?.label || '')}${tk === 'memory' ? ' <button class="link danger" id="forgetMem">기억 지우기</button>' : ''}`) + tplNotes);
 
     const r = state.roster;
     const rosterStatus = !state.rosterFile ? badge('mute', '선택') : r?.error ? badge('bad', '읽지 못함')
@@ -162,6 +208,10 @@
 
     $$('[data-rm-p]').forEach((b) => b.addEventListener('click', () => { state.personal = state.personal.filter((f) => fileId(f) !== b.dataset.rmP); state.assign.delete(b.dataset.rmP); reload(); }));
     $$('[data-rm-t]').forEach((b) => b.addEventListener('click', () => { state.templates = []; reload(); }));
+    $('#forgetMem')?.addEventListener('click', () => {
+      if (!confirm('이 PC가 기억하는 실적(이용자현황 포함)을 지울까요? 다음엔 지난달 실적 파일을 직접 넣어야 해요.')) return;
+      memForget(); reload();
+    });
     $$('input[name=tpl]').forEach((el) => el.addEventListener('change', () => { state.templateIdx = Number(el.value); reload(); }));
     $('#rmRoster')?.addEventListener('click', () => { state.rosterFile = null; reload(); });
     $('#rmLog')?.addEventListener('click', () => { state.logTpl = null; renderAll(); });
@@ -343,7 +393,7 @@
   }
 
   // ── 단계 표시 · 만들기 상태 ─────────────────────────────
-  const ready = () => state.personal.length > 0 && state.templates.length > 0 && unnamed().length === 0;
+  const ready = () => state.personal.length > 0 && unnamed().length === 0;
   function renderSteps() {
     const s1 = ready(), s3 = !!(state.result || state.result2);
     $$('#steps li').forEach((li) => {
@@ -352,7 +402,7 @@
     });
   }
   function renderMake() {
-    const need = !state.personal.length ? '개인 파일 필요' : !state.templates.length ? '실적 파일 필요' : unnamed().length ? '이름 확인 필요' : '';
+    const need = !state.personal.length ? '개인 파일 필요' : unnamed().length ? '이름 확인 필요' : '';
     $('#st1').innerHTML = state.result ? badge('ok', '완료') : need ? badge('mute', need) : badge('ok', '준비됨');
     $('#st2').innerHTML = state.result2 ? badge('ok', '완료') : need ? badge('mute', need) : badge('ok', '준비됨');
     const roster = state.roster && !state.roster.error;
@@ -365,7 +415,7 @@
   }
   function blockIfNotReady() {
     if (ready()) return false;
-    $('#msg').innerHTML = `<span class="bad">${!state.personal.length ? '개인 파일을 먼저 넣어 주세요.' : !state.templates.length ? '안전망 실적 파일을 먼저 넣어 주세요.' : '아이 이름을 정하지 않은 파일이 있어요. 1번에서 골라 주세요.'}</span>`;
+    $('#msg').innerHTML = `<span class="bad">${!state.personal.length ? '개인 파일을 먼저 넣어 주세요.' : '아이 이름을 정하지 않은 파일이 있어요. 1번에서 골라 주세요.'}</span>`;
     return true;
   }
   const list = (items) => `<ul>${items.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>`;
@@ -381,7 +431,8 @@
       const sessions = Step1.buildSessions(all);
       const agg = Step1.aggregate(sessions);
       const moves = state.moves.filter((m) => m.include && m.name && /^\d{4}-\d{2}-\d{2}$/.test(m.date));
-      const res = await Step1.buildWorkbook(state.templates[state.templateIdx], sessions, agg, year, month, manualValues(), moves);
+      const res = await Step1.buildWorkbook(state.tpl.file, sessions, agg, year, month, manualValues(), moves);
+      const remembered = memSave(year, month, res.buffer);   // 다음 달 바탕으로 기억
       res.unmapped.forEach((u) => warnings.push(`'실적 정리'에 맞는 행이 없는 서비스: ${u.key} (${u.sessions}회기/${u.persons}명) — 직접 확인 필요`));
       moves.filter((m) => moveMissing(m)).forEach((m) => warnings.push(`${m.name} ${m.type}: ${m.type === '퇴소' ? '퇴소사유·자립' : '만나이·가출원인·학업현황'} 칸이 비어 있어요`));
       state.result = { ...res, sessions, agg, records: all, year, month };
@@ -390,6 +441,7 @@
       out.innerHTML = `
         <a class="btn dl" href="${url}" download="${esc(res.fileName)}">⬇ ${esc(res.fileName)}</a>
         <p class="muted small" style="margin:6px 0 0">개인 기록 ${all.length}건 → 목록 ${res.lineCount}줄 · 엑셀에서 열면 합계가 다시 계산돼요</p>
+        <p class="small" style="margin:2px 0 0">${remembered ? `<span class="good">✓ 이 PC가 ${month}월 실적을 기억했어요 — 다음 달엔 실적 파일을 안 넣어도 돼요</span>` : `<span class="warn">이 브라우저에는 기억할 수 없어요 — 내려받은 파일을 다음 달에 넣어 주세요</span>`}</p>
         ${warnings.length ? `<details open class="warnbox"><summary>확인 필요 ${warnings.length}건</summary>${list(warnings)}</details>` : ''}
         ${res.notes.length ? `<details><summary>바뀐 내용 ${res.notes.length}건</summary>${list(res.notes)}</details>` : ''}
         <details><summary>'실적 정리'에 들어간 숫자</summary><div class="scroll"><table class="mini"><thead><tr><th>행</th><th>서비스</th><th>회기</th><th>명</th></tr></thead>
