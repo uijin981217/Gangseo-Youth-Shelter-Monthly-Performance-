@@ -15,6 +15,7 @@
   const state = {
     personal: [], templates: [], templateIdx: 0, rosterFile: null, roster: null, logTpl: null, hwpWarn: false,
     parsed: [], info: null, moves: [], result: null, result2: null,
+    outreachFile: null, outreach: null, outreachEdits: {}, manualEdits: {},
     assign: new Map(),   // 원본 파일 id → { name } (사람이 고른 이름)
     auto: new Map(),     // 원본 파일 id → { name, reason } (추천)
   };
@@ -28,6 +29,7 @@
       if (/\.hwpx$/i.test(f.name)) { state.logTpl = f; state.hwpWarn = false; continue; }
       if (/\.hwp$/i.test(f.name)) { state.hwpWarn = true; continue; }
       if (!/\.xlsx$/i.test(f.name) || f.name.startsWith('~$')) continue;
+      if (Outreach.isOutreachFileName(f.name)) { state.outreachFile = f; continue; }
       if (Roster.isRosterFileName(f.name)) { state.rosterFile = f; continue; }
       if (Step1.isSummaryFileName(f.name)) state.templates = state.templates.filter((t) => t.name !== f.name).concat(f);
       else {
@@ -82,6 +84,11 @@
     if (tpl) {
       try { state.info = await Step1.inspectTemplate(tpl, year, month); }
       catch (e) { state.info = { error: e.message, manual: [], residents: [], admissions: [], discharges: [] }; }
+    }
+    state.outreach = null;
+    if (state.outreachFile) {
+      try { state.outreach = await Outreach.parseOutreach(state.outreachFile, year, month); }
+      catch (e) { state.outreach = { error: e.message, acts: [], warnings: [] }; }
     }
     state.roster = null;
     if (state.rosterFile) {
@@ -161,7 +168,52 @@
   }
   const unnamed = () => state.parsed.filter((p) => p.raw && !p.person);
 
-  function renderAll() { renderSlots(); renderMoves(); renderCheck(); renderManual(); renderMake(); renderSteps(); if (rulesReady) RulesUI.render(); }
+  function renderAll() { renderSlots(); renderMoves(); renderCheck(); renderOutreach(); renderManual(); renderMake(); renderSteps(); if (rulesReady) RulesUI.render(); }
+
+  // ── 2. 확인: 아웃리치 ───────────────────────────────────
+  // 활동마다 일지에 적을 칸(장소·프로그램·참석기관 등). 종류별로 마지막에 쓴 프로그램·참석기관은 기억해 두고 미리 채움
+  const OR_MEMO = 'shelter-outreach-memo-v1';
+  const orMemo = () => { try { return JSON.parse(localStorage.getItem(OR_MEMO) || '{}') || {}; } catch { return {}; } };
+  function outreachDetails() {
+    const memo = orMemo(), out = {};
+    for (const a of state.outreach?.acts || []) {
+      const e = state.outreachEdits[a.id] || {};
+      out[a.id] = { ...e, program: e.program ?? memo[a.type]?.program ?? '', orgs: e.orgs ?? memo[a.type]?.orgs ?? '',
+        place: e.place ?? (a.place || memo[a.type]?.place || '') };
+    }
+    return out;
+  }
+  function renderOutreach() {
+    const box = $('#outreachBox'), sum = $('#sumOutreach');
+    const o = state.outreach;
+    if (!state.outreachFile) { box.innerHTML = '<p class="muted small">「아웃리치」 파일을 넣으면 활동을 읽어 실적 정리 숫자와 일지 내용을 채워요.</p>'; sum.innerHTML = badge('mute', '선택'); return; }
+    if (o?.error) { box.innerHTML = `<p class="bad small">아웃리치 파일을 읽지 못했어요: ${esc(o.error)}</p>`; sum.innerHTML = badge('bad', '읽지 못함'); return; }
+    const acts = o.acts, det = outreachDetails();
+    const n = (t) => acts.filter((a) => a.type === t).length;
+    const parts = ['community', 'seoul', 'school', 'cyber'].filter((t) => n(t)).map((t) => `${Outreach.TYPE_LABEL[t]} ${n(t)}`);
+    sum.innerHTML = o.warnings.some((w) => /확인 필요/.test(w)) ? badge('warn', `${parts.join(' · ')} · 확인 필요`) : acts.length ? badge('ok', parts.join(' · ')) : badge('mute', '이 달 활동 없음');
+    const md = (d) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`;
+    const inp = (a, k, ph, w = 150) => `<input type="text" data-or="${esc(a.id)}" data-k="${k}" value="${esc(det[a.id][k] ?? a[k] ?? '')}" placeholder="${ph}" style="width:${w}px">`;
+    box.innerHTML = `${o.warnings.length ? `<div class="warnbox small" style="margin-bottom:8px">${o.warnings.map(esc).join('<br>')}</div>` : ''}
+      <div class="scroll"><table class="outreach"><thead><tr><th>날짜</th><th>구분</th><th>활동제목</th><th>일지에 들어갈 내용</th></tr></thead><tbody>${acts.map((a) => `
+        <tr><td>${md(a.date)}</td>
+          <td><span class="tag ${a.type === 'unknown' ? 'out' : 'in'}">${Outreach.TYPE_LABEL[a.type]}${a.region ? `·${esc(a.region)}` : ''}</span><div class="muted small">${esc(a.method)}</div></td>
+          <td class="small">${esc(a.title)}</td>
+          <td class="small">${a.type === 'community' ? `장소 ${inp(a, 'place', '장소 (확인 필요)', 170)} 상담 ${inp(a, 'counsel', '0', 44)}명<br>프로그램 ${inp(a, 'program', '비워 두면 빈칸')} 참석기관 ${inp(a, 'orgs', '비워 두면 빈칸', 200)}`
+            : a.type === 'seoul' ? `제 ${inp(a, 'round', '57', 44)}회 · 장소 ${inp(a, 'place', '장소', 200)}<br>프로그램 ${inp(a, 'program', '관계신호등 확인 등', 200)}<br>참석기관 ${inp(a, 'orgs', '금천여자단기청소년쉼터 등', 320)}`
+            : a.type === 'school' ? `장소 ${inp(a, 'place', '서울특별시 강서구 ○○고등학교', 220)}<br>프로그램 ${inp(a, 'program', '보드게임, 생명존중교육 등', 220)}<br>참석기관 ${inp(a, 'orgs', '참석기관', 300)}`
+            : a.type === 'cyber' ? `페이스북 댓글 ${inp(a, 'people', '3', 44)}명` : '<span class="warn">일지·실적에서 빠져요</span>'}</td></tr>`).join('')}</tbody></table></div>
+      <p class="muted small">프로그램·참석기관은 종류별로 마지막에 쓴 내용을 기억해서 다음에 미리 채워요.</p>`;
+    $$('#outreachBox [data-or]').forEach((el) => el.addEventListener('input', () => {
+      const a = acts.find((x) => x.id === el.dataset.or);
+      (state.outreachEdits[a.id] ||= {})[el.dataset.k] = el.value;
+      if (el.dataset.k === 'program' || el.dataset.k === 'orgs' || (el.dataset.k === 'place' && a.type !== 'community')) {
+        try { const m = orMemo(); (m[a.type] ||= {})[el.dataset.k] = el.value; localStorage.setItem(OR_MEMO, JSON.stringify(m)); } catch { /* 저장 못 해도 진행 */ }
+      }
+      clearResults();
+      if (el.dataset.k === 'counsel' || el.dataset.k === 'people') renderManual();
+    }));
+  }
   let rulesReady = false;
 
   // ── 1. 파일 칸 ──────────────────────────────────────────
@@ -206,6 +258,12 @@
       : `<span class="muted small">없어도 돼요. 내장 양식으로 만들어요</span>${state.hwpWarn ? '<div class="muted small">.hwp는 넣지 않아도 돼요(내장 양식 사용)</div>' : ''}`;
     slot('#slotLog', ICON.doc, '운영일지 양식', state.logTpl ? badge('ok', '넣은 양식') : badge('mute', '선택 · 내장 양식'), '예: 쉼터운영일지 2026 n월.hwpx', logBody);
 
+    const o = state.outreach;
+    slot('#slotOutreach', ICON.cal, '아웃리치',
+      !state.outreachFile ? badge('mute', '선택') : o?.error ? badge('bad', '읽지 못함') : badge('ok', `${o?.acts.length || 0}건`),
+      '예: 아웃리치[2026-11-15].xlsx (내보낸 그대로)',
+      state.outreachFile ? `${esc(state.outreachFile.name)} <button class="x" title="빼기" id="rmOutreach">×</button>` : '<span class="muted small">넣으면 아웃리치 실적과 일지 내용이 채워져요</span>');
+
     $$('[data-rm-p]').forEach((b) => b.addEventListener('click', () => { state.personal = state.personal.filter((f) => fileId(f) !== b.dataset.rmP); state.assign.delete(b.dataset.rmP); reload(); }));
     $$('[data-rm-t]').forEach((b) => b.addEventListener('click', () => { state.templates = []; reload(); }));
     $('#forgetMem')?.addEventListener('click', () => {
@@ -214,8 +272,9 @@
     });
     $$('input[name=tpl]').forEach((el) => el.addEventListener('change', () => { state.templateIdx = Number(el.value); reload(); }));
     $('#rmRoster')?.addEventListener('click', () => { state.rosterFile = null; reload(); });
+    $('#rmOutreach')?.addEventListener('click', () => { state.outreachFile = null; state.outreachEdits = {}; reload(); });
     $('#rmLog')?.addEventListener('click', () => { state.logTpl = null; renderAll(); });
-    $('#fileCount').textContent = `개인 ${p.length} · 실적 ${t.length} · 근무표 ${state.rosterFile ? 1 : 0} · 일지 양식 ${state.logTpl ? 1 : 0}`;
+    $('#fileCount').textContent = `개인 ${p.length} · 실적 ${t.length} · 근무표 ${state.rosterFile ? 1 : 0} · 일지 양식 ${state.logTpl ? 1 : 0} · 아웃리치 ${state.outreachFile ? 1 : 0}`;
   }
 
   // ── 1. 이름 없는 원본 파일 → 아이 이름 정하기 ───────────────
@@ -373,11 +432,23 @@
     const info = state.info;
     const tbody = $('#manualBody');
     if (!info || !info.manual?.length) { tbody.innerHTML = '<tr><td colspan="3" class="muted small">안전망 실적 파일을 넣으면 표시돼요.</td></tr>'; $('#sumManual').innerHTML = badge('mute', '실적 파일 필요'); return; }
+    // 아웃리치 파일이 있으면 계산된 숫자를 미리 채움 (사람이 고친 값이 우선)
+    const auto = state.outreach?.acts ? Outreach.summaryCounts(state.outreach.acts, state.outreachEdits) : {};
+    const cell = (m, k, i, disabled) => {
+      const key = `${m.key}|${k}`;
+      const a = auto[m.key]?.[i];
+      const typed = state.manualEdits[key];
+      const val = typed ?? (a != null ? a : m[k]);
+      const tag = typed == null && a != null ? ' class="autofill" title="아웃리치 파일로 계산"' : '';
+      return `<td><input type="number" min="0" data-row="${m.row}" data-key="${key}" data-k="${k}" value="${esc(val)}"${tag} ${disabled ? 'disabled title="병합되었거나 수식이 있는 칸"' : ''}></td>`;
+    };
     tbody.innerHTML = info.manual.map((m) => `
-      <tr><td>${esc(m.label)} <span class="muted small">(${m.row}행)</span></td>
-      <td><input type="number" min="0" data-row="${m.row}" data-k="sessions" value="${esc(m.sessions)}" ${m.sessionsIsFormula ? 'disabled title="병합되었거나 수식이 있는 칸"' : ''}></td>
-      <td><input type="number" min="0" data-row="${m.row}" data-k="persons" value="${esc(m.persons)}" ${m.personsIsFormula ? 'disabled title="병합되었거나 수식이 있는 칸"' : ''}></td></tr>`).join('');
-    $$('#manualBody input').forEach((el) => el.addEventListener('input', () => { clearResults(); renderManualSummary(); }));
+      <tr><td>${esc(m.label)} <span class="muted small">(${m.row}행)</span>${auto[m.key] ? ' <span class="badge b-ok">아웃리치</span>' : ''}</td>
+      ${cell(m, 'sessions', 0, m.sessionsIsFormula)}${cell(m, 'persons', 1, m.personsIsFormula)}</tr>`).join('');
+    $$('#manualBody input').forEach((el) => el.addEventListener('input', () => {
+      state.manualEdits[el.dataset.key] = el.value; el.classList.remove('autofill');
+      clearResults(); renderManualSummary();
+    }));
     renderManualSummary();
   }
   function renderManualSummary() {
@@ -471,7 +542,8 @@
       const residents = await Step1.residentsFromBuffer(state.result.buffer);
       const tpl = logTemplate();
       const roster = state.roster && !state.roster.error ? state.roster.roster : null;
-      const res = await Step2.buildLog(tpl.file, state.result.sessions, residents, year, month, { roster, rules: RulesUI.rules });
+      const outreach = state.outreach?.acts ? Outreach.logLines(state.outreach.acts, outreachDetails()) : null;
+      const res = await Step2.buildLog(tpl.file, state.result.sessions, residents, year, month, { roster, rules: RulesUI.rules, outreach });
       state.result2 = res;
       const url = URL.createObjectURL(res.blob);
       const sample = res.summary.find((s) => s.lines > 0) || res.summary[0];
@@ -524,7 +596,7 @@
     dz.addEventListener('drop', (e) => { e.preventDefault(); dz.classList.remove('over'); addFiles([...e.dataTransfer.files]); });
     $('#fileInput').addEventListener('change', (e) => { addFiles([...e.target.files]); e.target.value = ''; });
     $('#clear').addEventListener('click', () => {
-      Object.assign(state, { personal: [], templates: [], parsed: [], info: null, moves: [], rosterFile: null, roster: null, logTpl: null, hwpWarn: false });
+      Object.assign(state, { personal: [], templates: [], parsed: [], info: null, moves: [], rosterFile: null, roster: null, logTpl: null, hwpWarn: false, outreachFile: null, outreach: null, outreachEdits: {}, manualEdits: {} });
       clearResults(); renderAll();
     });
     $('#addIn').addEventListener('click', () => addManualMove('입소'));
@@ -535,6 +607,7 @@
     RulesUI.init({
       getSessions: () => state.sessions || [],
       getRoster: () => (state.roster && !state.roster.error ? state.roster.roster : null),
+      getOutreach: (ds) => (state.outreach?.acts?.length ? Outreach.logLines(state.outreach.acts.filter((a) => a.date === ds), outreachDetails())[ds] : null),
       getYM: ym,
       onChange: () => { state.result2 = null; $('#res2').innerHTML = ''; renderMake(); renderSteps(); },   // 규칙이 바뀌면 일지는 다시 만들어야 함
     });

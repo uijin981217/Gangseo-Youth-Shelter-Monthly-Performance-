@@ -66,7 +66,7 @@
     const manual = MANUAL_ROWS.map((m) => {
       const r = find(MANUAL_SPEC[m.row] || []);
       if (!r) notes.push(`'실적 정리'에서 '${m.label}' 항목을 이름으로 찾지 못해 ${m.row}행을 썼어요 — 확인해 주세요`);
-      return { ...m, row: r || m.row };
+      return { ...m, key: m.row, row: r || m.row };   // key = 원래 줄 번호(항목 구분용)
     });
     return { svc, manual, notes };
   }
@@ -498,11 +498,16 @@
         const v = agg[k] || [0, 0];
         put(row, v[0], v[1]);
       }
+      // 직접 입력 줄: 적은 칸만 넣고, 비운 칸은 그대로 둠. 당월(D·E)은 이번 달 값으로 맞춤(지난달 값이 남지 않게)
       for (const m of manualValues || []) {
         const num = (x) => (x === '' || x == null ? null : Number(x));
-        const a = num(m.sessions), b = num(m.persons);
-        if (a == null && b == null) continue;
-        put(m.row, a ?? 0, b ?? 0);
+        const R = ss.getRow(m.row);
+        for (const [k, c, dc] of [['sessions', cS, 4], ['persons', cS + 1, 5]]) {
+          if (!(k in m)) continue;                         // 병합·수식 칸이라 입력 칸이 없음
+          const v = num(m[k]);
+          if (v != null && !hasFormula(R.getCell(c))) R.getCell(c).value = v;
+          if (!hasFormula(R.getCell(dc))) R.getCell(dc).value = v ?? (hasFormula(R.getCell(c)) ? R.getCell(dc).value : (typeof R.getCell(c).value === 'number' ? R.getCell(c).value : null));
+        }
       }
       const mapped = new Set(Object.values(ROW_MAP));
       for (const k of Object.keys(agg)) if (!mapped.has(k)) unmapped.push({ key: k, sessions: agg[k][0], persons: agg[k][1] });

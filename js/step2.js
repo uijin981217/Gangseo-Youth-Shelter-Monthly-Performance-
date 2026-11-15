@@ -238,6 +238,7 @@
       if (g.dateP) setParaText(g.dateP, textOf(g.dateP).replace(/\d{4}\s*년(\s*)\d{1,2}\s*월(\s*)\d{1,2}\s*일(\s*)\S\s*요일/, `${year}년$1${month}월$2${d}일$3${dow}요일`));
       const daySessions = byDate.get(ds) || [];
       const { lines, unknown } = global.Rules.dayLines(daySessions, rules, ds);
+      for (const [sec, ls] of Object.entries(opts.outreach?.[ds] || {})) (lines[sec] ||= []).push(...ls.map((l) => ` ${l}`));   // 아웃리치
       unknown.forEach((u) => unknownAll.add(u));
       const info = {
         residents: residentsOn(residents, ds, daySessions), lines,

@@ -156,6 +156,7 @@
     if (!ds) return;
     const day = sessions().filter((s) => s.date === ds);
     const { lines } = Rules.dayLines(day, rules, ds);
+    for (const [sec, ls] of Object.entries(hooks.getOutreach?.(ds) || {})) (lines[sec] ||= []).push(...ls.map((l) => ` ${l}`));
     const roster = hooks.getRoster();
     const st = roster && roster[ds] ? Roster.staffLines(roster[ds], rules.staffLine) : null;
     const secs = Object.entries(lines).filter(([, l]) => l.length).map(([k, l]) => `<div class="pv">${esc(k)}</div>${l.map((x) => `<div>${esc(x)}</div>`).join('')}`).join('');
