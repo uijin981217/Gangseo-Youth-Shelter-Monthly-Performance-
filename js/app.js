@@ -15,8 +15,12 @@
   const state = {
     personal: [], templates: [], templateIdx: 0, rosterFile: null, roster: null, logTpl: null, hwpWarn: false,
     parsed: [], info: null, moves: [], result: null, result2: null,
+    assign: new Map(),   // 원본 파일 id → { name } (사람이 고른 이름)
+    auto: new Map(),     // 원본 파일 id → { name, reason } (추천)
   };
   const ym = () => ({ year: Number($('#year').value), month: Number($('#month').value) });
+  const fileId = (f) => `${f.name}|${f.size}|${f.lastModified}`;
+  const isRaw = (f) => !Step1.isNamedPersonalFile(f.name);
 
   // ── 파일 받기 ───────────────────────────────────────────
   async function addFiles(fileList) {
@@ -26,7 +30,10 @@
       if (!/\.xlsx$/i.test(f.name) || f.name.startsWith('~$')) continue;
       if (Roster.isRosterFileName(f.name)) { state.rosterFile = f; continue; }
       if (Step1.isSummaryFileName(f.name)) state.templates = state.templates.filter((t) => t.name !== f.name).concat(f);
-      else state.personal = state.personal.filter((p) => p.name !== f.name).concat(f);
+      else {
+        if (isRaw(f)) { try { f.__months = await Step1.peekMonths(f); } catch { f.__months = []; } }
+        state.personal = state.personal.filter((p) => fileId(p) !== fileId(f)).concat(f);
+      }
     }
     guessPeriod();
     pickTemplate();
@@ -35,11 +42,18 @@
 
   function guessPeriod() {
     const months = state.personal.map((f) => Step1.parsePersonalName(f.name).month).filter(Boolean);
-    if (months.length) {
-      const freq = {}; months.forEach((m) => (freq[m] = (freq[m] || 0) + 1));
-      $('#month').value = Number(Object.entries(freq).sort((a, b) => b[1] - a[1])[0][0]);
+    const freq = {};
+    if (months.length) months.forEach((m) => (freq[m] = (freq[m] || 0) + 1));
+    else {                                   // 이름 없는 원본만 있으면 안에 든 날짜로 판단
+      for (const f of state.personal) for (const [ymKey, n] of f.__months || []) freq[ymKey] = (freq[ymKey] || 0) + n;
     }
-    for (const t of state.templates) { const y = t.name.match(/(\d{4})\s*년/); if (y) { $('#year').value = y[1]; break; } }
+    const top = Object.entries(freq).sort((a, b) => b[1] - a[1])[0];
+    if (top) {
+      const [k] = top;
+      if (String(k).includes('-')) { $('#year').value = Number(k.slice(0, 4)); $('#month').value = Number(k.slice(5, 7)); }
+      else $('#month').value = Number(k);
+    }
+    if (months.length) for (const t of state.templates) { const y = t.name.match(/(\d{4})\s*년/); if (y) { $('#year').value = y[1]; break; } }
   }
 
   function pickTemplate() {
@@ -56,8 +70,11 @@
     clearResults();
     state.parsed = [];
     for (const f of state.personal) {
-      try { state.parsed.push(await Step1.readPersonal(f, year, month)); }
-      catch (e) { state.parsed.push({ person: Step1.parsePersonalName(f.name).person, records: [], warnings: [`[${f.name}] 읽지 못함: ${e.message}`] }); }
+      const raw = isRaw(f);
+      let r;
+      try { r = await Step1.readPersonal(f, year, month, raw ? '' : undefined); }
+      catch (e) { r = { person: raw ? '' : Step1.parsePersonalName(f.name).person, records: [], warnings: [`[${f.name}] 읽지 못함: ${e.message}`] }; }
+      state.parsed.push(Object.assign(r, { file: f, id: fileId(f), raw }));
     }
     const tpl = state.templates[state.templateIdx];
     state.info = null;
@@ -70,10 +87,37 @@
       try { state.roster = await Roster.parseRoster(state.rosterFile, year, month); }
       catch (e) { state.roster = { error: e.message }; }
     }
+    afterNames();
+  }
+
+  // ── 이름 없는 원본 파일: 추천 + 사람이 고른 이름 반영 ─────
+  function candidates() {
+    const res = state.info && !state.info.error ? state.info.residents : [];
+    const list = res.map((r) => ({ name: r.name, inDate: r.inDate, end: r.end }));
+    for (const p of state.parsed) if (!p.raw && p.person && !list.some((c) => c.name === p.person)) list.push({ name: p.person });
+    for (const a of state.assign.values()) if (a.name && !list.some((c) => c.name === a.name)) list.push({ name: a.name });
+    return list;
+  }
+  function applyNames() {
+    const { year, month } = ym();
+    const raws = state.parsed.filter((p) => p.raw);
+    const taken = [...state.parsed.filter((p) => !p.raw).map((p) => p.person), ...raws.map((p) => state.assign.get(p.id)?.name).filter(Boolean)];
+    const need = raws.filter((p) => !state.assign.get(p.id));
+    state.auto = need.length ? Naming.suggest(need.map((p) => ({ id: p.id, records: p.records })), candidates().filter((c) => c.inDate || c.end !== undefined), taken, year, month) : new Map();
+    for (const p of raws) {
+      const name = state.assign.get(p.id)?.name || state.auto.get(p.id)?.name || '';
+      p.person = name;
+      for (const r of p.records) r.person = name;
+    }
+  }
+  /** 이름이 정해지거나 바뀐 뒤: 회기·입퇴소·화면 다시 계산 (파일은 다시 안 읽음) */
+  function afterNames() {
+    applyNames();
     state.sessions = Step1.buildSessions(state.parsed.flatMap((p) => p.records));   // 규칙 미리보기용
     rebuildMoves();
     renderAll();
   }
+  const unnamed = () => state.parsed.filter((p) => p.raw && !p.person);
 
   function renderAll() { renderSlots(); renderMoves(); renderCheck(); renderManual(); renderMake(); renderSteps(); if (rulesReady) RulesUI.render(); }
   let rulesReady = false;
@@ -88,9 +132,12 @@
   function renderSlots() {
     const { month } = ym();
     const p = state.personal;
-    slot('#slotPersonal', ICON.users, '개인 파일', p.length ? badge('ok', `${p.length}개`) : badge('mute', '필요'),
-      `예: 홍길동 ${month}월.xlsx`,
-      p.map((f) => `<span class="chip">${esc(Step1.parsePersonalName(f.name).person)}<button class="x" title="빼기" data-rm-p="${esc(f.name)}">×</button></span>`).join(''), !p.length);
+    const noName = unnamed().length;
+    slot('#slotPersonal', ICON.users, '개인 파일',
+      !p.length ? badge('mute', '필요') : noName ? badge('warn', `이름 확인 ${noName}개`) : badge('ok', `${p.length}개`),
+      `원본(실행목록[…].xlsx) 그대로 또는 이름 붙인 파일(홍길동 ${month}월.xlsx)`,
+      state.parsed.map((x) => `<span class="chip ${x.raw && !x.person ? 'miss' : ''}">${x.raw ? (x.person ? `${esc(x.person)}<span class="muted small">·원본</span>` : '이름 없음') : esc(x.person)}<button class="x" title="빼기" data-rm-p="${esc(x.id)}">×</button></span>`).join(''), !p.length);
+    renderNames();
 
     const t = state.templates;
     const tplName = t[state.templateIdx]?.name || '';
@@ -113,12 +160,64 @@
       : `<span class="muted small">없어도 돼요. 내장 양식으로 만들어요</span>${state.hwpWarn ? '<div class="muted small">.hwp는 넣지 않아도 돼요(내장 양식 사용)</div>' : ''}`;
     slot('#slotLog', ICON.doc, '운영일지 양식', state.logTpl ? badge('ok', '넣은 양식') : badge('mute', '선택 · 내장 양식'), '예: 쉼터운영일지 2026 n월.hwpx', logBody);
 
-    $$('[data-rm-p]').forEach((b) => b.addEventListener('click', () => { state.personal = state.personal.filter((f) => f.name !== b.dataset.rmP); reload(); }));
+    $$('[data-rm-p]').forEach((b) => b.addEventListener('click', () => { state.personal = state.personal.filter((f) => fileId(f) !== b.dataset.rmP); state.assign.delete(b.dataset.rmP); reload(); }));
     $$('[data-rm-t]').forEach((b) => b.addEventListener('click', () => { state.templates = []; reload(); }));
     $$('input[name=tpl]').forEach((el) => el.addEventListener('change', () => { state.templateIdx = Number(el.value); reload(); }));
     $('#rmRoster')?.addEventListener('click', () => { state.rosterFile = null; reload(); });
     $('#rmLog')?.addEventListener('click', () => { state.logTpl = null; renderAll(); });
     $('#fileCount').textContent = `개인 ${p.length} · 실적 ${t.length} · 근무표 ${state.rosterFile ? 1 : 0} · 일지 양식 ${state.logTpl ? 1 : 0}`;
+  }
+
+  // ── 1. 이름 없는 원본 파일 → 아이 이름 정하기 ───────────────
+  function renderNames() {
+    const box = $('#nameBox');
+    const raws = state.parsed.filter((p) => p.raw);
+    if (!raws.length) { box.innerHTML = ''; return; }
+    const md = (d) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`;
+    const cands = candidates().map((c) => c.name);
+    const usedBy = (name, id) => state.parsed.some((q) => q.id !== id && q.person === name);
+    box.innerHTML = `
+      <div class="row between"><strong class="small">이름 없는 원본 파일 ${raws.length}개 — 아이 이름을 확인해 주세요</strong>
+        <button id="dlNamed" class="btn">⬇ 이름 붙여 내려받기</button></div>
+      <p class="muted small" style="margin:2px 0 6px">추천은 제목에 나온 이름, 입·퇴소일, 남은 사람으로 추측한 거예요. 틀리면 바꿔 주세요.${!cands.length ? ' 안전망 실적 파일을 넣으면 입소생 명단으로 추천해 드려요.' : ''}</p>
+      <div class="scroll"><table class="names"><thead><tr><th>파일</th><th>기록</th><th>아이 이름</th><th>근거</th></tr></thead><tbody>${raws.map((p) => {
+        const dates = p.records.map((r) => r.date).sort();
+        const man = state.assign.get(p.id), sug = state.auto.get(p.id);
+        const cur = p.person;
+        const opts = [...new Set([...cands, ...(cur ? [cur] : [])])];
+        return `<tr data-id="${esc(p.id)}">
+          <td class="small">${esc(p.file.name)}</td>
+          <td class="small">${p.records.length}건${dates.length ? ` · ${md(dates[0])}~${md(dates[dates.length - 1])}` : ''}${
+            p.records.filter((r) => /^\s*(입소|퇴소)\s*상담/.test(r.title)).map((r) => `<div class="warn">${esc(r.title.trim().slice(0, 4))} ${md(r.date)}</div>`).join('')}</td>
+          <td><select data-name><option value="">— 고르세요 —</option>${opts.map((n) => `<option value="${esc(n)}" ${n === cur ? 'selected' : ''}>${esc(n)}${usedBy(n, p.id) ? ' (다른 파일에 있음)' : ''}</option>`).join('')}<option value="__custom">직접 입력…</option></select></td>
+          <td class="small">${man ? badge('mute', '직접 고름') : sug ? `${badge('ok', '추천')} <span class="muted">${esc(sug.reason || '')}</span>` : badge('warn', '추천 없음')}
+            ${cur && usedBy(cur, p.id) ? '<div class="warn">같은 이름이 다른 파일에도 있어요</div>' : ''}</td></tr>`;
+      }).join('')}</tbody></table></div>`;
+    $$('#nameBox select[data-name]').forEach((sel) => sel.addEventListener('change', () => {
+      const id = sel.closest('tr').dataset.id;
+      let v = sel.value;
+      if (v === '__custom') { v = (prompt('아이 이름을 입력해 주세요') || '').trim(); if (!v) { renderNames(); return; } }
+      if (v) state.assign.set(id, { name: v }); else state.assign.delete(id);
+      clearResults(); afterNames();
+    }));
+    $('#dlNamed').addEventListener('click', downloadNamed);
+  }
+
+  /** 개인 파일을 '이름 n월.xlsx'로 이름 붙여 한 번에 내려받기 (내용은 그대로) */
+  async function downloadNamed() {
+    const { year, month } = ym();
+    if (unnamed().length) { alert('이름을 정하지 않은 파일이 있어요. 먼저 아이 이름을 골라 주세요.'); return; }
+    const zip = new JSZip(), used = new Set();
+    for (const p of state.parsed) {
+      let name = p.raw ? `${p.person} ${month}월.xlsx` : p.file.name;
+      for (let i = 2; used.has(name); i++) name = name.replace(/( \(\d+\))?\.xlsx$/i, ` (${i}).xlsx`);
+      used.add(name);
+      zip.file(name, await p.file.arrayBuffer());
+    }
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = `개인 파일 ${year}년 ${month}월.zip`; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
 
   // ── 2. 확인: 입·퇴소 ────────────────────────────────────
@@ -199,7 +298,7 @@
   function arrival() {
     const info = state.info;
     if (!info || info.error) return null;
-    const got = new Set(state.parsed.map((p) => p.person));
+    const got = new Set(state.parsed.map((p) => p.person).filter(Boolean));
     const expected = [...new Set([...info.residents.map((r) => r.name), ...state.moves.filter((m) => m.type === '입소' && m.include && m.name).map((m) => m.name)])];
     return { got, expected, missing: expected.filter((n) => !got.has(n)), extra: [...got].filter((n) => !expected.includes(n)) };
   }
@@ -244,7 +343,7 @@
   }
 
   // ── 단계 표시 · 만들기 상태 ─────────────────────────────
-  const ready = () => state.personal.length > 0 && state.templates.length > 0;
+  const ready = () => state.personal.length > 0 && state.templates.length > 0 && unnamed().length === 0;
   function renderSteps() {
     const s1 = ready(), s3 = !!(state.result || state.result2);
     $$('#steps li').forEach((li) => {
@@ -253,7 +352,7 @@
     });
   }
   function renderMake() {
-    const need = !state.personal.length ? '개인 파일 필요' : !state.templates.length ? '실적 파일 필요' : '';
+    const need = !state.personal.length ? '개인 파일 필요' : !state.templates.length ? '실적 파일 필요' : unnamed().length ? '이름 확인 필요' : '';
     $('#st1').innerHTML = state.result ? badge('ok', '완료') : need ? badge('mute', need) : badge('ok', '준비됨');
     $('#st2').innerHTML = state.result2 ? badge('ok', '완료') : need ? badge('mute', need) : badge('ok', '준비됨');
     const roster = state.roster && !state.roster.error;
@@ -266,7 +365,7 @@
   }
   function blockIfNotReady() {
     if (ready()) return false;
-    $('#msg').innerHTML = `<span class="bad">${!state.personal.length ? '개인 파일' : '안전망 실적 파일'}을 먼저 넣어 주세요.</span>`;
+    $('#msg').innerHTML = `<span class="bad">${!state.personal.length ? '개인 파일을 먼저 넣어 주세요.' : !state.templates.length ? '안전망 실적 파일을 먼저 넣어 주세요.' : '아이 이름을 정하지 않은 파일이 있어요. 1번에서 골라 주세요.'}</span>`;
     return true;
   }
   const list = (items) => `<ul>${items.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>`;

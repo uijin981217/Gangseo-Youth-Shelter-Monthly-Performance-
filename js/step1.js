@@ -111,10 +111,28 @@
   }
 
   function isSummaryFileName(name) { return /안전망/.test(name); }
+  /** '홍길동 9월.xlsx'처럼 이름이 붙은 파일인지 (원본 '실행목록[…].xlsx'은 아님) */
+  function isNamedPersonalFile(name) {
+    const p = parsePersonalName(name);
+    return p.month != null && !/실행목록/.test(name) && /[가-힣]/.test(p.person);
+  }
+
+  /** 파일에 들어 있는 서비스제공일의 달별 건수: [['2026-09', 116], …] (많은 순) */
+  async function peekMonths(file) {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(await file.arrayBuffer());
+    const ws = wb.worksheets[0];
+    let hdr = 0, dc = 0;
+    for (let r = 1; r <= Math.min(15, ws.rowCount) && !hdr; r++) ws.getRow(r).eachCell((c, ci) => { if (cellText(c.value).trim() === '서비스제공일' && !dc) { hdr = r; dc = ci; } });
+    const n = {};
+    if (hdr) for (let r = hdr + 1; r <= ws.rowCount; r++) { const d = dateText(ws.getRow(r).getCell(dc).value); if (/^\d{4}-\d{2}/.test(d)) n[d.slice(0, 7)] = (n[d.slice(0, 7)] || 0) + 1; }
+    return Object.entries(n).sort((a, b) => b[1] - a[1]);
+  }
 
   /** 개인 파일 하나 읽기 */
-  async function readPersonal(file, year, month) {
-    const { person } = parsePersonalName(file.name);
+  async function readPersonal(file, year, month, personOverride) {
+    const person = personOverride ?? parsePersonalName(file.name).person;
+    let skipped = 0;
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(await file.arrayBuffer());
     const ws = wb.worksheets[0];
@@ -137,7 +155,7 @@
       const svc = cellText(g('자원제공서비스명')).trim();
       if (!svc) continue;
       const date = dateText(g('서비스제공일'));
-      if (!date.startsWith(ym)) { warnings.push(`[${person}] ${date} ${svc} → ${month}월이 아니라서 제외`); continue; }
+      if (!date.startsWith(ym)) { skipped++; continue; }
       records.push({
         person, svc, key: svcKey(svc),
         title: cellText(g('서비스 제공제목')), date,
@@ -145,6 +163,7 @@
         group: cellText(g('집단서비스여부')).trim() === 'Y',
       });
     }
+    if (skipped) warnings.push(`[${person || file.name}] ${month}월이 아닌 기록 ${skipped}건은 뺐어요`);
     return { person, records, warnings };
   }
 
@@ -500,6 +519,6 @@
     return R ? R.left.map((e) => ({ name: e.name, inDate: e.inDate, end: e.end })) : [];
   }
 
-  global.Step1 = { residentsFromBuffer, ROW_MAP, MANUAL_ROWS, parsePersonalName, isSummaryFileName, readPersonal, buildSessions, aggregate,
+  global.Step1 = { residentsFromBuffer, isNamedPersonalFile, peekMonths, ROW_MAP, MANUAL_ROWS, parsePersonalName, isSummaryFileName, readPersonal, buildSessions, aggregate,
     buildListLines, inspectTemplate, buildWorkbook, detectMoves, cellText };
 })(window);

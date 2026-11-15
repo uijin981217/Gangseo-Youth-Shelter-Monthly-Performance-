@@ -116,6 +116,9 @@
   .newtag { background: var(--warn-soft); color: var(--warn); border-radius: 6px; padding: 0 6px; font-size: 11.5px; font-weight: 700; margin-left: 4px; }
   table.extras { min-width: 640px; } table.extras input[type=text] { width: 100%; min-width: 220px; }
 
+  .namebox:not(:empty) { margin-top: 12px; border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; background: var(--sub); }
+  table.names { min-width: 560px; } table.names td { vertical-align: middle; } table.names td:first-child { overflow-wrap: anywhere; }
+
   /* 만들기 */
   .outs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .out { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
@@ -178,6 +181,7 @@
       <div class="slot" id="slotRoster"></div>
       <div class="slot" id="slotLog"></div>
     </div>
+    <div id="nameBox" class="namebox"></div>
     <div class="row between" style="margin-top:10px">
       <span id="fileCount" class="muted small"></span>
       <button id="clear" class="link danger">모두 비우기</button>
@@ -276,6 +280,7 @@
 <script src="lib/jszip.min.js"></script>
 <script src="js/step1.js"></script>
 <script src="js/rules.js"></script>
+<script src="js/naming.js"></script>
 <script src="js/roster.js"></script>
 <script src="js/step2.js"></script>
 <script src="js/log-template.js"></script>
