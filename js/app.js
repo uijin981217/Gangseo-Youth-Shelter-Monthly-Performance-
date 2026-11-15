@@ -15,7 +15,7 @@
   const state = {
     personal: [], templates: [], templateIdx: 0, rosterFile: null, roster: null, logTpl: null, hwpWarn: false,
     parsed: [], info: null, moves: [], result: null, result2: null,
-    outreachFile: null, outreach: null, outreachEdits: {}, manualEdits: {},
+    outreachFile: null, outreach: null, outreachEdits: {}, manualEdits: {}, aftercareFile: null, aftercare: null,
     assign: new Map(),   // 원본 파일 id → { name } (사람이 고른 이름)
     auto: new Map(),     // 원본 파일 id → { name, reason } (추천)
   };
@@ -26,6 +26,7 @@
   // ── 파일 받기 ───────────────────────────────────────────
   async function addFiles(fileList) {
     for (const f of fileList) {
+      if (Aftercare.isAftercareFileName(f.name)) { state.aftercareFile = f; continue; }   // 사후관리대장 (.hwp/.hwpx)
       if (/\.hwpx$/i.test(f.name)) { state.logTpl = f; state.hwpWarn = false; continue; }
       if (/\.hwp$/i.test(f.name)) { state.hwpWarn = true; continue; }
       if (!/\.xlsx$/i.test(f.name) || f.name.startsWith('~$')) continue;
@@ -84,6 +85,11 @@
     if (tpl) {
       try { state.info = await Step1.inspectTemplate(tpl, year, month); }
       catch (e) { state.info = { error: e.message, manual: [], residents: [], admissions: [], discharges: [] }; }
+    }
+    state.aftercare = null;
+    if (state.aftercareFile) {
+      try { state.aftercare = await Aftercare.parseAftercare(state.aftercareFile, year, month); }
+      catch (e) { state.aftercare = { error: e.message, entries: [], warnings: [] }; }
     }
     state.outreach = null;
     if (state.outreachFile) {
@@ -183,6 +189,17 @@
     }
     return out;
   }
+  /** 개인 파일 밖에서 오는 일지 줄: 사후관리대장 + 아웃리치 → { 날짜: { 칸: [줄] } } */
+  function extraLogLines() {
+    const parts = [];
+    if (state.aftercare?.entries?.length) parts.push(Aftercare.logLines(state.aftercare.entries));
+    if (state.outreach?.acts?.length) parts.push(Outreach.logLines(state.outreach.acts, outreachDetails()));
+    if (!parts.length) return null;
+    const out = {};
+    for (const p of parts) for (const [d, secs] of Object.entries(p)) for (const [sec, ls] of Object.entries(secs)) ((out[d] ||= {})[sec] ||= []).push(...ls);
+    return out;
+  }
+
   function renderOutreach() {
     const box = $('#outreachBox'), sum = $('#sumOutreach');
     const o = state.outreach;
@@ -259,6 +276,17 @@
     slot('#slotLog', ICON.doc, '운영일지 양식', state.logTpl ? badge('ok', '넣은 양식') : badge('mute', '선택 · 내장 양식'), '예: 쉼터운영일지 2026 n월.hwpx', logBody);
 
     const o = state.outreach;
+    const ac = state.aftercare;
+    const acDates = ac?.entries ? [...new Set(ac.entries.map((e) => `${Number(e.date.slice(5, 7))}/${Number(e.date.slice(8, 10))}`))] : [];
+    slot('#slotAftercare', ICON.doc, '사후관리대장',
+      !state.aftercareFile ? badge('mute', '선택') : ac?.error ? badge('bad', '읽지 못함') : ac?.entries.length ? badge('ok', `${month}월 ${ac.entries.length}건`) : badge('warn', `${month}월 기록 없음`),
+      '예: 사후관리대장 - 2026년.hwp (그대로)',
+      state.aftercareFile ? `${esc(state.aftercareFile.name)} <button class="x" title="빼기" id="rmAftercare">×</button>`
+        + (ac?.error ? `<div class="bad small">${esc(ac.error)}</div>` : '')
+        + (acDates.length ? `<div class="muted small">상담한 날: ${acDates.join(', ')}</div>` : '')
+        + (ac?.warnings?.length ? `<div class="warn small">${ac.warnings.map(esc).join('<br>')}</div>` : '')
+        : '<span class="muted small">넣으면 사후관리 실적과 일지 내용이 채워져요</span>');
+
     slot('#slotOutreach', ICON.cal, '아웃리치',
       !state.outreachFile ? badge('mute', '선택') : o?.error ? badge('bad', '읽지 못함') : badge('ok', `${o?.acts.length || 0}건`),
       '예: 아웃리치[2026-11-15].xlsx (내보낸 그대로)',
@@ -273,8 +301,9 @@
     $$('input[name=tpl]').forEach((el) => el.addEventListener('change', () => { state.templateIdx = Number(el.value); reload(); }));
     $('#rmRoster')?.addEventListener('click', () => { state.rosterFile = null; reload(); });
     $('#rmOutreach')?.addEventListener('click', () => { state.outreachFile = null; state.outreachEdits = {}; reload(); });
+    $('#rmAftercare')?.addEventListener('click', () => { state.aftercareFile = null; reload(); });
     $('#rmLog')?.addEventListener('click', () => { state.logTpl = null; renderAll(); });
-    $('#fileCount').textContent = `개인 ${p.length} · 실적 ${t.length} · 근무표 ${state.rosterFile ? 1 : 0} · 일지 양식 ${state.logTpl ? 1 : 0} · 아웃리치 ${state.outreachFile ? 1 : 0}`;
+    $('#fileCount').textContent = `개인 ${p.length} · 실적 ${t.length} · 근무표 ${state.rosterFile ? 1 : 0} · 일지 양식 ${state.logTpl ? 1 : 0} · 아웃리치 ${state.outreachFile ? 1 : 0} · 사후관리 ${state.aftercareFile ? 1 : 0}`;
   }
 
   // ── 1. 이름 없는 원본 파일 → 아이 이름 정하기 ───────────────
@@ -434,6 +463,7 @@
     if (!info || !info.manual?.length) { tbody.innerHTML = '<tr><td colspan="3" class="muted small">안전망 실적 파일을 넣으면 표시돼요.</td></tr>'; $('#sumManual').innerHTML = badge('mute', '실적 파일 필요'); return; }
     // 아웃리치 파일이 있으면 계산된 숫자를 미리 채움 (사람이 고친 값이 우선)
     const auto = state.outreach?.acts ? Outreach.summaryCounts(state.outreach.acts, state.outreachEdits) : {};
+    if (state.aftercare && !state.aftercare.error) auto[59] = [state.aftercare.entries.length, state.aftercare.entries.length];   // 사후관리: 1번에 1회기 1명
     const cell = (m, k, i, disabled) => {
       const key = `${m.key}|${k}`;
       const a = auto[m.key]?.[i];
@@ -542,7 +572,7 @@
       const residents = await Step1.residentsFromBuffer(state.result.buffer);
       const tpl = logTemplate();
       const roster = state.roster && !state.roster.error ? state.roster.roster : null;
-      const outreach = state.outreach?.acts ? Outreach.logLines(state.outreach.acts, outreachDetails()) : null;
+      const outreach = extraLogLines();
       const res = await Step2.buildLog(tpl.file, state.result.sessions, residents, year, month, { roster, rules: RulesUI.rules, outreach });
       state.result2 = res;
       const url = URL.createObjectURL(res.blob);
@@ -596,7 +626,7 @@
     dz.addEventListener('drop', (e) => { e.preventDefault(); dz.classList.remove('over'); addFiles([...e.dataTransfer.files]); });
     $('#fileInput').addEventListener('change', (e) => { addFiles([...e.target.files]); e.target.value = ''; });
     $('#clear').addEventListener('click', () => {
-      Object.assign(state, { personal: [], templates: [], parsed: [], info: null, moves: [], rosterFile: null, roster: null, logTpl: null, hwpWarn: false, outreachFile: null, outreach: null, outreachEdits: {}, manualEdits: {} });
+      Object.assign(state, { personal: [], templates: [], parsed: [], info: null, moves: [], rosterFile: null, roster: null, logTpl: null, hwpWarn: false, outreachFile: null, outreach: null, outreachEdits: {}, manualEdits: {}, aftercareFile: null, aftercare: null });
       clearResults(); renderAll();
     });
     $('#addIn').addEventListener('click', () => addManualMove('입소'));
@@ -607,7 +637,7 @@
     RulesUI.init({
       getSessions: () => state.sessions || [],
       getRoster: () => (state.roster && !state.roster.error ? state.roster.roster : null),
-      getOutreach: (ds) => (state.outreach?.acts?.length ? Outreach.logLines(state.outreach.acts.filter((a) => a.date === ds), outreachDetails())[ds] : null),
+      getOutreach: (ds) => extraLogLines()?.[ds] || null,
       getYM: ym,
       onChange: () => { state.result2 = null; $('#res2').innerHTML = ''; renderMake(); renderSteps(); },   // 규칙이 바뀌면 일지는 다시 만들어야 함
     });
