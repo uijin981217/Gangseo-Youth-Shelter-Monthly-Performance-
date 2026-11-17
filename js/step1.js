@@ -102,19 +102,32 @@
     return '3사이버';
   }
 
-  /** 파일 이름에서 이름/월 추출: "홍길동 9월.xlsx", "홍길동9월.xlsx" */
+  /** 파일 이름에서 이름/월 추출. 순서·번호·복사본 표시와 상관없이 읽음:
+      "홍길동 9월", "홍길동9월", "10월 홍길동", "10월홍길동", "10월 홍길동 1", "10월 홍길동(2)",
+      "2026년 10월 홍길동", "홍길동_10월_2", "홍길동 10월 - 복사본" (Mac 파일 이름의 풀어쓴 한글도 처리) */
+  const NOT_NAME = /^(실행목록|개인|개인별|기록|개인기록|서비스|서비스기록|실적|파일|자료|원본|복사본|월|년)$/;
   function parsePersonalName(fileName) {
-    const base = fileName.replace(/\.xlsx$/i, '').trim();
-    const m = base.match(/^(\D+?)\s*0?(\d{1,2})\s*월\s*$/);
-    if (m) return { person: m[1].trim(), month: Number(m[2]) };
-    return { person: base, month: null };
+    const base = String(fileName).normalize('NFC').replace(/\.xlsx$/i, '').trim();
+    const mm = base.match(/(?:^|[^\d])0?(\d{1,2})\s*월/);
+    const month = mm ? Number(mm[1]) : null;
+    if (!month || month < 1 || month > 12) return { person: base, month: null };
+    let rest = base
+      .replace(/\d{2,4}\s*년/g, ' ')
+      .replace(/0?\d{1,2}\s*월/, ' ')
+      .replace(/[-_\s]*복사본/g, ' ')
+      .replace(/[(\[]\s*\d+\s*[)\]]/g, ' ')    // (1) [2]
+      .replace(/\d+/g, ' ');                    // 끝에 붙인 번호 1, 2
+    const words = rest.split(/[\s_\-.,·~]+/).filter((w) => w && !NOT_NAME.test(w));
+    const hangul = words.filter((w) => /^[가-힣]{2,5}$/.test(w));
+    const person = (hangul.length ? hangul : words).join(' ').trim();
+    return { person, month };
   }
 
   function isSummaryFileName(name) { return /안전망/.test(name); }
   /** '홍길동 9월.xlsx'처럼 이름이 붙은 파일인지 (원본 '실행목록[…].xlsx'은 아님) */
   function isNamedPersonalFile(name) {
     const p = parsePersonalName(name);
-    return p.month != null && !/실행목록/.test(name) && /[가-힣]/.test(p.person);
+    return p.month != null && !/실행목록/.test(String(name).normalize('NFC')) && /[가-힣]/.test(p.person);
   }
 
   /** 파일에 들어 있는 서비스제공일의 달별 건수: [['2026-09', 116], …] (많은 순) */
