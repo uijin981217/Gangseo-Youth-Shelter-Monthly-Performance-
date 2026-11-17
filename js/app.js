@@ -208,21 +208,25 @@
     const my = ++eduSeq; state.eduRows = [];
     if (state.ySupport && state.sessions?.length) {
       const { year, month } = ym();
-      try { const rows = await Yearly.eduPreview(state.ySupport.file, year, month, state.sessions); if (my === eduSeq) state.eduRows = rows; } catch (e) { console.warn(e); }
+      try { const rows = await Yearly.polishPreview(state.ySupport.file, year, month, state.sessions); if (my === eduSeq) state.eduRows = rows; } catch (e) { console.warn(e); }
     }
     if (my === eduSeq) renderEdu();
   }
+  // 지난 기록·규칙으로 못 채웠고 아직 짧은 줄(등교지도, 전단지 아르바이트 등)만 '확인 필요'로 표시
+  const thin = (r, mem) => !mem[r.key] && !r.how && r.auto.replace(/\s/g, '').length <= 10;
   function renderEdu() {
     const box = $('#eduBox'); if (!box) return;
     const rows = state.eduRows || [];
     if (!rows.length) { box.innerHTML = ''; return; }
-    const mem = dmemLoad(), miss = rows.filter((r) => !mem[r.key] && !r.how).length;
-    box.innerHTML = `<details ${miss ? 'open' : ''} class="edu"><summary class="small"><b>학업지원 상세내역 문구</b> <span class="muted">— 지난달까지 쓴 기록에서 찾아 채웠어요. 고치면 이 PC가 기억해요${miss ? ` · <b class="bad">${miss}줄은 지난 기록이 없어 그대로예요</b>` : ''}</span></summary>
+    const mem = dmemLoad();
+    const sheets = [...new Set(rows.map((r) => r.sheet))];
+    box.innerHTML = `<p class="small" style="margin:8px 0 2px"><b>지원 내역 상세 문구</b> <span class="muted">— 지난달까지 쓴 기록과 말투에 맞춰 채웠어요. 고치면 이 PC가 기억해요 (다음 달 같은 제목에도 그대로)</span></p>`
+      + sheets.map((sh) => { const rs = rows.filter((r) => r.sheet === sh); const miss = rs.filter((r) => thin(r, mem)).length; return `<details ${miss ? 'open' : ''} class="edu"><summary class="small"><b>${esc(sh)}</b> <span class="muted">${rs.length}줄${miss ? ` · <b class="bad">${miss}줄은 짧은 제목 그대로예요 — 확인해 주세요</b>` : ''}</span></summary>
       <table class="edu-t"><thead><tr><th>이름</th><th>서비스</th><th>개인 파일 제목</th><th>지원 내역에 쓸 문구</th></tr></thead><tbody>
-      ${rows.map((r) => `<tr><td>${esc(r.name)}</td><td class="small">${esc(r.svc)}</td><td class="small muted">${esc(r.title)}${r.n > 1 ? ` ×${r.n}` : ''}</td>
-        <td><input data-edu="${esc(r.key)}" value="${esc(mem[r.key] ?? r.auto)}" placeholder="${esc(r.auto)}" class="${!mem[r.key] && !r.how ? 'miss' : ''}"><span class="small muted">${mem[r.key] ? '직접' : r.how === 'history' ? '지난 기록' : r.how === 'rule' ? '자동' : ''}</span></td></tr>`).join('')}
-      </tbody></table>
-      <p class="small muted" style="margin:4px 0 0">예) 등교지도 → 「OO고등학교 2학년 3반 등교」. 지운 칸은 자동 문구로 돌아가요.</p></details>`;
+      ${rs.map((r) => `<tr><td>${esc(r.name)}</td><td class="small">${esc(r.svc)}</td><td class="small muted">${esc(r.title)}${r.n > 1 ? ` ×${r.n}` : ''}</td>
+        <td><input data-edu="${esc(r.key)}" value="${esc(mem[r.key] ?? r.auto)}" placeholder="${esc(r.auto)}" class="${thin(r, mem) ? 'miss' : ''}"><span class="small muted">${mem[r.key] ? '직접' : r.how === 'history' ? '지난 기록' : r.how === 'rule' ? '자동' : ''}</span></td></tr>`).join('')}
+      </tbody></table></details>`; }).join('')
+      + '<p class="small muted" style="margin:4px 0 0">예) 등교지도 → 「OO고등학교 2학년 3반 등교」. 지운 칸은 자동 문구로 돌아가요.</p>';
     $$('#eduBox [data-edu]').forEach((el) => el.addEventListener('change', () => {
       const r = rows.find((x) => x.key === el.dataset.edu);
       const v = el.value.trim(); dmemSet(el.dataset.edu, v && v !== r?.auto ? v : '');

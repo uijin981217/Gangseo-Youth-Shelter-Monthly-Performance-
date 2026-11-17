@@ -164,89 +164,202 @@
     return `${head} - ${m[2].trim()}`;
   }
 
-  // ── 학업지원 문구 다듬기 ─────────────────────────────────
-  // 개인 파일 제목은 짧게('등교지도', '보컬레슨', '검정고시 학습지도_국어') 적히는데, 지원 내역엔
-  // 선생님들이 'OO고등학교 2학년 3반 등교'처럼 자세히 써 왔음 → 같은 파일의 지난 기록에서 그 아이의 문구를 찾아 씀
-  const EDU = '학업지원';
+  // ── 지원 내역 문구 다듬기 (학업·자립·의료) ───────────────────
+  // 개인 파일 제목은 짧고 순서가 제각각('등교지도', '전단지 아르바이트 출근지도(OO역 OO짐)', '의약품 제공_파스 1매(허리통증)')인데,
+  // 지원 내역엔 선생님들이 정해진 말투로 자세히 써 왔음.
+  //  · 매번 되풀이되는 활동(등교·레슨·아르바이트 출근) → 그 아이의 지난 기록에서 같은 활동 문구를 그대로
+  //  · 한 번씩 있는 일(면접·원서접수·진료·약 제공) → 손글씨 말투 순서로 바꿔 씀
+  const POLISH = ['학업지원', '자립지원', '의료지원'];
   const SUBJ = /^(국어|수학|영어|사회|과학|한국사|도덕|체육|기술가정|기가|미술|음악|역사|정보|전과목)$/;
+  const SUBJ_G = /(국어|수학|영어|사회|과학|한국사|도덕|체육|기술가정|미술|음악)/g;
+  const GENERIC = /^(수업|수강|참여|참석|지도|학습지도|및|등|제공|지원|지급|진료|아르바이트|출근지도|출근|건)$/;
+  const PLACE = /(센터|학원|아카데미|학교|대학교|역|연습실|도서관|꿈드림|친구랑|의원|병원|재단|점)$/;
+  const HOSP = /(의원|병원|의학과|치과|외과|내과|보건소|클리닉|한의원|약국)$/;
   const cleanSp = (s) => String(s || '').replace(/\s+/g, ' ').trim();
-  const coreTokens = (s) => cleanSp(String(s).replace(/[_\-–(),·.]/g, ' ')).split(' ').filter((w) => w.length >= 2 && !/^(수업|수강|참여|참석|지도|학습지도|및|등)$/.test(w));
-  /** 학업지원 시트에 손으로 쓴 지난 기록: [{name, svc, detail, y, m, row}] (오래된 것 → 최근 순) */
-  function eduHistory(wb) {
-    const ws = wb.getWorksheet(EDU); if (!ws) return [];
-    const out = []; let y = 0, m = 0;
-    for (let r = 1; r <= ws.rowCount; r++) {
-      const row = ws.getRow(r);
-      const h = T(row.getCell(1).value).match(/^(\d{4})\s*년\s*(\d{1,2})\s*월/);
-      if (h) { y = +h[1]; m = +h[2]; continue; }
-      const name = T(row.getCell(3).value), svc = cleanSp(T(row.getCell(4).value)), detail = cleanSp(T(row.getCell(5).value));
-      if (!y || !name || name === '이름' || !detail) continue;
-      out.push({ name, svc, detail, y, m, row: r });
+  const coreTokens = (s) => cleanSp(String(s).replace(/[_\-–(),·.'"]/g, ' ')).split(' ').filter((w) => w.length >= 2 && !GENERIC.test(w));
+  const subjSet = (s) => [...new Set(String(s).match(SUBJ_G) || [])].sort().join(',');
+  /** 받침 있으면 '으로', 없거나 ㄹ받침이면 '로' */
+  const ro = (w) => { const c = String(w).trim().slice(-1).charCodeAt(0) - 0xac00; if (c < 0 || c > 11171) return `${w}로`; const j = c % 28; return j === 0 || j === 8 ? `${w}로` : `${w}으로`; };
+
+  /** 시트별 손으로 쓴 지난 기록: { 시트: [{name, svc, detail, y, m, row}] } (오래된 것 → 최근 순) */
+  function supportHistory(wb, year, month) {
+    const all = {};
+    for (const sn of POLISH) {
+      const ws = wb.getWorksheet(sn); const out = []; all[sn] = out; if (!ws) continue;
+      let y = 0, m = 0;
+      for (let r = 1; r <= ws.rowCount; r++) {
+        const row = ws.getRow(r);
+        const h = T(row.getCell(1).value).match(/^(\d{4})\s*년\s*(\d{1,2})\s*월/);
+        if (h) { y = +h[1]; m = +h[2]; continue; }
+        const name = T(row.getCell(3).value), svc = cleanSp(T(row.getCell(4).value)), detail = cleanSp(T(row.getCell(5).value));
+        if (!y || !name || name === '이름' || !detail) continue;
+        if (y > year || (y === year && m >= month)) continue;          // 만들 달과 그 뒤는 본보기로 안 씀
+        out.push({ name, svc, detail, y, m, row: r });
+      }
+      out.sort((a, b) => a.y - b.y || a.m - b.m || a.row - b.row);
     }
-    return out.sort((a, b) => a.y - b.y || a.m - b.m || a.row - b.row);
+    return all;
+  }
+  /** 같은 활동으로 보이는 그 아이의 최근 기록 — 제목 낱말이 절반 이상(글자 수 기준) 들어 있고 과목이 같은 것 */
+  function bestMatch(text, cands) {
+    const tok = coreTokens(text); if (!tok.length) return '';
+    const total = tok.reduce((n, w) => n + w.length, 0), subj = subjSet(text);
+    let best = '', bestScore = 0;
+    for (let i = cands.length - 1; i >= 0; i--) {
+      const d = cands[i].detail;
+      if (subjSet(d) !== subj) continue;
+      const score = tok.reduce((n, w) => n + (d.includes(w) ? w.length : 0), 0);
+      if (score * 2 >= total && score > bestScore) { best = d; bestScore = score; }
+    }
+    return best;
   }
   /** 검정고시 단계: 지난 기록·이번 달 다른 기록에서 '중졸/고졸/초졸' 찾기 */
   function examLevel(name, hist, sessions) {
     const texts = [...hist.filter((h) => h.name === name).map((h) => h.detail), ...sessions.filter((s) => (s.people || [s.name]).includes(name)).map((s) => s.title)];
     for (let i = texts.length - 1; i >= 0; i--) {
-      const t = String(texts[i]);
-      const m = t.match(/(초졸|중졸|고졸)/) || t.match(/(초등학교|중학교|고등학교)\s*졸업/);
+      const m = String(texts[i]).match(/(초졸|중졸|고졸)/) || String(texts[i]).match(/(초등학교|중학교|고등학교)\s*졸업/);
       if (m) return { 초등학교: '초졸', 중학교: '중졸', 고등학교: '고졸' }[m[1]] || m[1];
     }
     return '';
   }
-  /** 기록 하나의 상세내역 → 손으로 쓴 것처럼. 반환 { text, how } (how: 'history'|'rule'|'' ) */
-  function eduDetail(it, hist, sessions) {
-    const base = detailText(it.title);
-    const mine = hist.filter((h) => h.name === it.name && h.svc === it.svc);
+  /** '장소(내용)' / '내용 - 장소' / '내용(장소)' → [내용, 장소] (장소 없으면 null) */
+  function splitPlace(t, re) {
+    let m = t.match(/^(.+?)\s*\(([^()]+)\)$/);
+    if (m) { if (re.test(m[2].trim())) return [m[1].trim(), m[2].trim()]; if (re.test(m[1].trim())) return [m[2].trim(), m[1].trim()]; }
+    m = t.match(/^(.+?)\s+-\s+(.+)$/);
+    if (m) { if (re.test(m[2].trim())) return [m[1].trim(), m[2].trim()]; if (re.test(m[1].trim())) return [m[2].trim(), m[1].trim()]; }
+    return null;
+  }
+
+  // 학업지원
+  function polishEdu(it, base, mine, hist, sessions) {
     const latest = (pred) => { for (let i = mine.length - 1; i >= 0; i--) if (pred(mine[i].detail)) return mine[i].detail; return ''; };
-    // 1) 등교지도 → 지난 기록의 'OO학교 O학년 O반 등교'
-    if (/^등교(지도)?$/.test(base.replace(/\s/g, ''))) {
+    if (/^등교(지도)?$/.test(base.replace(/\s/g, ''))) {                   // 등교지도 → 'OO학교 O학년 O반 등교'
       const d = latest((t) => /등교$/.test(t) && t.length > 3);
       return d ? { text: d, how: 'history' } : { text: base, how: '' };
     }
-    // 2) 검정고시 학습지도_국어 → '고졸 검정고시 국어 문제 풀이'
-    const subj = base.replace(/^검정고시\s*(학습지도|학습|대비)?\s*[-–]?\s*/, '');
-    const subs = subj.split(/\s*[,·및]\s*|\s+/).filter(Boolean);
-    if (/검정고시/.test(it.svc + it.title) && subs.length && subs.every((w) => SUBJ.test(w))) {
+    const subs = base.replace(/^검정고시\s*(학습지도|학습|대비)?\s*[-–]?\s*/, '').split(/\s*[,·및]\s*|\s+/).filter(Boolean);
+    if (/검정고시/.test(it.svc + it.title) && subs.length && subs.every((w) => SUBJ.test(w))) {   // 검정고시 학습지도_국어
       const lv = examLevel(it.name, hist, sessions);
       return { text: `${lv ? lv + ' ' : ''}검정고시 ${subs.join(', ')} 문제 풀이`, how: 'rule' };
     }
-    // 3) 그 밖: 제목의 낱말이 모두 들어 있는 그 아이의 최근 기록 (보컬레슨 → 'OO역 인근 연습실에서 보컬레슨')
-    const tok = coreTokens(base);
-    if (tok.length) {
-      const d = latest((t) => tok.every((w) => t.includes(w)));
-      if (d) return { text: d, how: 'history' };
-      // 긴 고유 낱말(기관·장소 이름)만 같아도 같은 활동으로 봄: '보컬수업 수강_OO아카데미'
-      const long = tok.filter((w) => w.length >= 5 && !SUBJ.test(w));
-      const d2 = long.length ? latest((t) => long.some((w) => t.includes(w))) : '';
-      if (d2) return { text: d2, how: 'history' };
-    }
-    // 4) 기록이 없으면 손글씨 순서로: '작곡 수업 수강 - OO청소년센터' → 'OO청소년센터 작곡 수업 참여'
-    let t = base;
-    const m = t.match(/^(.+?)\s+-\s+(.+)$/);
-    if (m && /(센터|학원|아카데미|학교|대학|역|연습실|도서관|꿈드림|친구랑)/.test(m[2])) t = `${m[2]} ${m[1].replace(/수강$/, '참여')}`;
+    const d = bestMatch(base, mine);
+    if (d) return { text: d, how: 'history' };
+    let t = base; const sp = splitPlace(t, PLACE);
+    if (sp) t = `${sp[1]} ${sp[0].replace(/수강$/, '참여')}`;
     t = t.replace(/^고등\s/, '고등학교 ').replace(/문제풀이/g, '문제 풀이');
     return { text: t, how: t !== base ? 'rule' : '' };
   }
+  // 자립지원
+  function polishJob(it, base, mine) {
+    let t = base.replace(/^홀로서기\s*-\s*/, '');
+    if (it.svc === '아르바이트 출근지도') {                                  // 출근은 매번 같은 곳 → 지난 기록
+      const d = bestMatch(t, mine);
+      if (d) return { text: d, how: 'history' };
+      t = t.replace(/\s*출근\s*지도/, '');
+      const m = t.match(/^(.+?)\s*\(([^()]+)\)$/);
+      if (m) t = `${m[2]} ${m[1]}`;
+      if (!/아르바이트/.test(t)) t += ' 아르바이트';
+      return { text: cleanSp(t), how: t !== base ? 'rule' : '' };
+    }
+    let m;
+    if ((m = t.match(/^아르바이트\s*면접\s*\((.+)\)$/))) t = `${m[1]} 아르바이트 면접 응시`;
+    else if ((m = t.match(/^(.+?)\s*[-_]\s*(\S*(?:학교|대학교|대학)(?:\s\S+)?)$/))) t = `${m[2]} ${m[1].replace(/^대학\s*/, '')}`;
+    else { const sp = splitPlace(t, /(센터|학원|어학원|아카데미|학교|대학교|재단|주민센터|점)$/); if (sp) t = `${sp[1]} ${sp[0]}`; }
+    t = t.replace(/수시\s*원서\s*접수/, '수시 원서접수').replace(/원서접수$/, '원서접수');
+    return { text: cleanSp(t), how: cleanSp(t) !== base ? 'rule' : '' };
+  }
+  // 의료지원
+  const DRUGS0 = { 속청: '소화제', 위청: '소화제', 안티푸라민: '파스', 모드콜: '종합감기약', 모드코프: '목감기약', '모드코 S': '코감기약', 후시딘: '연고' };
+  function drugBook(hist) {
+    const book = { ...DRUGS0 };
+    for (const h of hist) for (const m of h.detail.matchAll(/([가-힣A-Za-z]+(?:\s?S)?)\(([^()]*?(?:약|제|파스|연고))\)/g)) book[m[1]] = m[2];
+    // 가장 최근에 괄호 없이 쓴 약은 괄호를 안 붙임 (예: 요즘은 '타이레놀 2정'으로 씀)
+    for (const drug of Object.keys(book)) {
+      const last = hist.filter((h) => h.detail.includes(drug)).pop();
+      if (last && !new RegExp(`${drug.replace(/\s/g, '\\s?')}\\s*\\(`).test(last.detail)) delete book[drug];
+    }
+    return book;
+  }
+  function parseVisit(t) {        // '정형외과 진료 - 좌측 무릎통증(OO정형외과)' → { dept, hosp, why }
+    const m = t.match(/^(\S+?)\s*진료\s*(?:[-–_]\s*)?(.*)$/); if (!m) return null;
+    let hosp = '', why = '';
+    const rest = m[2].trim(), p = rest.match(/^(.*?)\s*\(([^()]+)\)$/);
+    if (p) { if (HOSP.test(p[2].trim())) { hosp = p[2].trim(); why = p[1].trim(); } else { hosp = p[1].trim(); why = p[2].trim(); } }
+    else if (HOSP.test(rest)) hosp = rest; else why = rest;
+    if (why && HOSP.test(why) && !hosp) { hosp = why; why = ''; }
+    return { dept: m[1], hosp, why };
+  }
+  function polishMed(it, base, mine, hist) {
+    let t = base;
+    if (it.svc === '의약품·의약외품') {
+      t = t.replace(/^의약품\s*(지원|제공|지급)\s*[-–_]?\s*/, '').replace(/지급/g, '제공').replace(/(\d)\s*(정|매|병|개|포|알)\s*제공/, '$1$2 제공');
+      t = t.replace(/^(.+?)을\s*호소\s+/, '$1 호소로 ');
+      let m;
+      if ((m = t.match(/^(.+?)\s+(\d+\s*(?:정|매|병|개|포|알))\s*\((.+?)\)$/))) t = `${ro(m[3])} ${m[1]} ${m[2]} 제공`;   // 파스 1매(허리통증)
+      else if ((m = t.match(/^([^()]+?)\s*\(([^()]+)\)$/)) && !/제공$/.test(t)) t = `${ro(m[2].replace(/,\s*/g, ', '))} ${m[1]} 제공`;   // 감기약(기침,콧물)
+      const book = drugBook(hist.의료지원);
+      for (const [drug, kind] of Object.entries(book)) {
+        const esc = drug.replace(/\s/g, '\\s?');
+        t = t.replace(new RegExp(`(${esc})(\\s*\\(${kind}\\)|\\s*${kind})?(?![가-힣(])`), `$1(${kind})`);
+      }
+      if (/^\S+(\(.+\))?$/.test(t)) {                                    // '속청'만 적힌 경우 → 지난 기록(누구 것이든)에서 같은 약 문구
+        const drug = t.replace(/\(.+\)$/, '');
+        const all = hist.의료지원.filter((h) => h.svc === it.svc && h.detail.includes(drug));
+        if (all.length) return { text: all[all.length - 1].detail, how: 'history' };
+      }
+      if (!/제공$/.test(t)) t += ' 제공';
+      t = cleanSp(t);
+      return { text: t, how: t !== base ? 'rule' : '' };
+    }
+    if (it.svc === '진단 및 치료') {
+      const v = parseVisit(t); if (!v) return { text: t, how: '' };
+      const past = mine.map((h) => parseVisit(h.detail)).filter((p) => p && p.dept.replace(/\s/g, '') === v.dept.replace(/\s/g, ''));
+      let how = 'rule';
+      if (v.hosp) { const full = past.map((p) => p.hosp).reverse().find((h) => h && h !== v.hosp && h.startsWith(v.hosp)); if (full) v.hosp = full; }
+      else { const h = past.map((p) => p.hosp).filter(Boolean).pop(); if (h) { v.hosp = h; how = 'history'; } }
+      if (!v.why) { const w = past.filter((p) => p.hosp === v.hosp && p.why).pop(); if (w) { v.why = w.why; how = 'history'; } }
+      t = `${v.dept} 진료${v.hosp ? ` - ${v.hosp}` : ''}${v.why ? (v.hosp ? `(${v.why})` : ` - ${v.why}`) : ''}`;
+      return { text: t, how: t !== base ? how : '' };
+    }
+    // 건강관리·건강검진: '병원(내용)'
+    t = t.replace(/^(건강검진|건강관리|예방접종)\s*-\s*/, '');
+    const sp = splitPlace(t, /(의원|병원|보건소|센터|재단)$/);
+    if (sp) t = `${sp[1]}(${sp[0]})`;
+    return { text: t, how: t !== base ? 'rule' : '' };
+  }
+  /** 기록 하나의 상세내역 → 손으로 쓴 것처럼. 반환 { text, how } (how: 'history'|'rule'|'' ) */
+  function polishDetail(sheet, it, hist, sessions) {
+    const base = detailText(it.title);
+    const h = hist[sheet] || [];
+    const mine = h.filter((x) => x.name === it.name && x.svc === it.svc);
+    if (sheet === '학업지원') return polishEdu(it, base, mine, h, sessions);
+    if (sheet === '자립지원') return polishJob(it, base, mine);
+    if (sheet === '의료지원') return polishMed(it, base, mine, hist);
+    return { text: base, how: '' };
+  }
   const detailKey = (name, svc, title) => `${name}|${svc}|${String(title || '').replace(/\s+/g, '')}`;
-  /** 화면 표시용: 이 달 학업지원 문구 (같은 아이·서비스·제목은 한 줄로) */
-  async function eduPreview(file, year, month, sessions) {
+  /** 화면 표시용: 이 달 학업·자립·의료 문구 (같은 아이·서비스·제목은 한 줄로) */
+  async function polishPreview(file, year, month, sessions) {
     const wb = new ExcelJS.Workbook(); await wb.xlsx.load(await file.arrayBuffer());
-    const hist = eduHistory(wb).filter((h) => h.y < year || (h.y === year && h.m < month));
-    const ym = `${year}-${p2(month)}`, map = SHEETS[EDU], seen = new Map();
-    for (const s of sessions) {
-      if (!s.date.startsWith(ym) || !(s.key in map)) continue;
-      for (const name of s.people || [s.name]) {
-        const it = { name, svc: map[s.key], title: s.title };
-        const k = detailKey(name, it.svc, s.title);
-        if (seen.has(k)) { seen.get(k).n++; continue; }
-        const d = eduDetail(it, hist, sessions);
-        seen.set(k, { key: k, name, svc: it.svc, title: cleanSp(s.title), auto: d.text, how: d.how, n: 1 });
+    const hist = supportHistory(wb, year, month);
+    const ym = `${year}-${p2(month)}`, seen = new Map();
+    for (const sheet of POLISH) {
+      const map = SHEETS[sheet];
+      for (const s of sessions) {
+        if (!s.date.startsWith(ym) || !(s.key in map)) continue;
+        for (const name of s.people || [s.name]) {
+          const it = { name, svc: map[s.key], title: s.title };
+          const k = detailKey(name, it.svc, s.title);
+          if (seen.has(k)) { seen.get(k).n++; continue; }
+          const d = polishDetail(sheet, it, hist, sessions);
+          seen.set(k, { key: k, sheet, name, svc: it.svc, title: cleanSp(s.title), auto: d.text, how: d.how, n: 1 });
+        }
       }
     }
-    return [...seen.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.svc < b.svc ? -1 : 1));
+    return [...seen.values()].sort((a, b) => POLISH.indexOf(a.sheet) - POLISH.indexOf(b.sheet) || (a.name < b.name ? -1 : a.name > b.name ? 1 : a.svc < b.svc ? -1 : 1));
   }
+
 
   function findBlocks(ws) {
     const heads = [];
@@ -263,7 +376,7 @@
     const wb = new ExcelJS.Workbook(); await wb.xlsx.load(await file.arrayBuffer());
     const notes = [], counts = {};
     const ym = `${year}-${p2(month)}`;
-    const hist = eduHistory(wb).filter((h) => h.y < year || (h.y === year && h.m < month));
+    const hist = supportHistory(wb, year, month);
     const overrides = opts.overrides || {};
     for (const [sheetName, map] of Object.entries(SHEETS)) {
       const ws = wb.getWorksheet(sheetName);
@@ -273,7 +386,7 @@
         if (!s.date.startsWith(ym) || !(s.key in map)) continue;
         for (const name of s.people || [s.name]) {
           const it = { date: s.date, time: s.time || '', name, svc: map[s.key], detail: detailText(s.title), title: s.title, key: s.key };
-          if (sheetName === EDU) { const o = overrides[detailKey(name, it.svc, s.title)]; it.detail = o != null && cleanSp(o) ? cleanSp(o) : eduDetail(it, hist, sessions).text; }
+          if (POLISH.includes(sheetName)) { const o = overrides[detailKey(name, it.svc, s.title)]; it.detail = o != null && cleanSp(o) ? cleanSp(o) : polishDetail(sheetName, it, hist, sessions).text; }
           items.push(it);
         }
       }
@@ -362,5 +475,5 @@
     return { buffer: await wb.xlsx.writeBuffer(), notes, counts };
   }
 
-  global.Yearly = { isUsersFile, isSupportFile, previousAges, buildUsers, buildSupport, detailText, eduPreview, detailKey };
+  global.Yearly = { isUsersFile, isSupportFile, previousAges, buildUsers, buildSupport, detailText, polishPreview, detailKey };
 })(window);
