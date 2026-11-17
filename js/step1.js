@@ -561,6 +561,19 @@
     return R ? R.left.map((e) => ({ name: e.name, inDate: e.inDate, end: e.end })) : [];
   }
 
-  global.Step1 = { residentsFromBuffer, blankTemplate, isNamedPersonalFile, peekMonths, ROW_MAP, MANUAL_ROWS, parsePersonalName, isSummaryFileName, readPersonal, buildSessions, aggregate,
+  /** 이용자현황 전체(입소: 나이·가출원인 / 퇴소: 사유·자립) — 연간 이용자현황 파일 채우기용 */
+  async function residentsDetailFromBuffer(buffer) {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buffer);
+    const rs = wb.getWorksheet(RESIDENT_SHEET);
+    const R = rs && readResidents(rs);
+    if (!R) return { left: [], right: [] };
+    return {
+      left: R.left.map((e) => ({ name: e.name, inDate: e.inDate, end: e.end, age: e.age, cause: e.cause, school: e.school })),
+      right: R.right.map((e) => ({ name: e.name, outDate: e.outDate, reason: e.reason, indep: e.indep })),
+    };
+  }
+
+  global.Step1 = { residentsFromBuffer, residentsDetailFromBuffer, blankTemplate, isNamedPersonalFile, peekMonths, ROW_MAP, MANUAL_ROWS, parsePersonalName, isSummaryFileName, readPersonal, buildSessions, aggregate,
     buildListLines, inspectTemplate, buildWorkbook, detectMoves, cellText };
 })(window);

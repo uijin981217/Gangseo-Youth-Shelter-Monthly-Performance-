@@ -16,6 +16,7 @@
     personal: [], templates: [], templateIdx: 0, rosterFile: null, roster: null, logTpl: null, hwpWarn: false,
     parsed: [], info: null, moves: [], result: null, result2: null,
     outreachFile: null, outreach: null, outreachEdits: {}, manualEdits: {}, aftercareFile: null, aftercare: null,
+    usersFile: null, supportFile: null, prevAges: {}, ageEdits: {}, result3: null,
     assign: new Map(),   // 원본 파일 id → { name } (사람이 고른 이름)
     auto: new Map(),     // 원본 파일 id → { name, reason } (추천)
   };
@@ -30,6 +31,8 @@
       if (/\.hwpx$/i.test(f.name)) { state.logTpl = f; state.hwpWarn = false; continue; }
       if (/\.hwp$/i.test(f.name)) { state.hwpWarn = true; continue; }
       if (!/\.xlsx$/i.test(f.name) || f.name.startsWith('~$')) continue;
+      if (Yearly.isUsersFile(f.name)) { state.usersFile = f; continue; }          // 연간 이용자현황
+      if (Yearly.isSupportFile(f.name)) { state.supportFile = f; continue; }      // 연간 학업·자립·법률·의료지원
       if (Outreach.isOutreachFileName(f.name)) { state.outreachFile = f; continue; }
       if (Roster.isRosterFileName(f.name)) { state.rosterFile = f; continue; }
       if (Step1.isSummaryFileName(f.name)) state.templates = state.templates.filter((t) => t.name !== f.name).concat(f);
@@ -86,6 +89,8 @@
       try { state.info = await Step1.inspectTemplate(tpl, year, month); }
       catch (e) { state.info = { error: e.message, manual: [], residents: [], admissions: [], discharges: [] }; }
     }
+    state.prevAges = {};
+    if (state.usersFile) { try { state.prevAges = await Yearly.previousAges(state.usersFile, month); } catch { state.prevAges = {}; } }
     state.aftercare = null;
     if (state.aftercareFile) {
       try { state.aftercare = await Aftercare.parseAftercare(state.aftercareFile, year, month); }
@@ -174,7 +179,7 @@
   }
   const unnamed = () => state.parsed.filter((p) => p.raw && !p.person);
 
-  function renderAll() { renderSlots(); renderMoves(); renderCheck(); renderOutreach(); renderManual(); renderMake(); renderSteps(); if (rulesReady) RulesUI.render(); }
+  function renderAll() { renderSlots(); renderMoves(); renderCheck(); renderOutreach(); renderManual(); renderAges(); renderMake(); renderSteps(); if (rulesReady) RulesUI.render(); }
 
   // ── 2. 확인: 아웃리치 ───────────────────────────────────
   // 활동마다 일지에 적을 칸(장소·프로그램·참석기관 등). 종류별로 마지막에 쓴 프로그램·참석기관은 기억해 두고 미리 채움
@@ -276,6 +281,13 @@
     slot('#slotLog', ICON.doc, '운영일지 양식', state.logTpl ? badge('ok', '넣은 양식') : badge('mute', '선택 · 내장 양식'), '예: 쉼터운영일지 2026 n월.hwpx', logBody);
 
     const o = state.outreach;
+    const yf = [state.usersFile, state.supportFile].filter(Boolean);
+    slot('#slotYearly', ICON.sheet, '연간 기록 파일',
+      yf.length ? badge('ok', `${yf.length}개`) : badge('mute', '선택'),
+      '예: 2026년 이용자현황.xlsx · 2026년 학업, 자립, 법률,의료지원.xlsx',
+      yf.length ? [['usersFile', '이용자현황'], ['supportFile', '지원 내역']].filter(([k]) => state[k]).map(([k, l]) => `<div>${esc(state[k].name)} <button class="x" title="빼기" data-rm-y="${k}">×</button></div>`).join('')
+        : '<span class="muted small">넣으면 그 달 시트·묶음을 채워서 돌려줘요</span>');
+
     const ac = state.aftercare;
     const acDates = ac?.entries ? [...new Set(ac.entries.map((e) => `${Number(e.date.slice(5, 7))}/${Number(e.date.slice(8, 10))}`))] : [];
     slot('#slotAftercare', ICON.doc, '사후관리대장',
@@ -302,6 +314,7 @@
     $('#rmRoster')?.addEventListener('click', () => { state.rosterFile = null; reload(); });
     $('#rmOutreach')?.addEventListener('click', () => { state.outreachFile = null; state.outreachEdits = {}; reload(); });
     $('#rmAftercare')?.addEventListener('click', () => { state.aftercareFile = null; reload(); });
+    $$('[data-rm-y]').forEach((b) => b.addEventListener('click', () => { state[b.dataset.rmY] = null; reload(); }));
     $('#rmLog')?.addEventListener('click', () => { state.logTpl = null; renderAll(); });
     $('#fileCount').textContent = `개인 ${p.length} · 실적 ${t.length} · 근무표 ${state.rosterFile ? 1 : 0} · 일지 양식 ${state.logTpl ? 1 : 0} · 아웃리치 ${state.outreachFile ? 1 : 0} · 사후관리 ${state.aftercareFile ? 1 : 0}`;
   }
@@ -506,12 +519,13 @@
     const need = !state.personal.length ? '개인 파일 필요' : unnamed().length ? '이름 확인 필요' : '';
     $('#st1').innerHTML = state.result ? badge('ok', '완료') : need ? badge('mute', need) : badge('ok', '준비됨');
     $('#st2').innerHTML = state.result2 ? badge('ok', '완료') : need ? badge('mute', need) : badge('ok', '준비됨');
+    $('#st3').innerHTML = state.result3 ? badge('ok', '완료') : !(state.usersFile || state.supportFile) ? badge('mute', '파일 넣으면 만들어요') : need ? badge('mute', need) : badge('ok', '준비됨');
     const roster = state.roster && !state.roster.error;
     $('#desc2').textContent = `날짜별 표 · 입소생 · 영역별 내용 · 근무자 ${roster ? '(근무표로 채움)' : '(근무표 없으면 비어 있음)'}`;
   }
   function clearResults() {
     state.result = null; state.result2 = null;
-    $('#res1').innerHTML = ''; $('#res2').innerHTML = ''; $('#msg').innerHTML = '';
+    $('#res1').innerHTML = ''; $('#res2').innerHTML = ''; $('#res3').innerHTML = ''; $('#msg').innerHTML = ''; state.result3 = null;
     renderMake(); renderSteps();
   }
   function blockIfNotReady() {
@@ -606,8 +620,77 @@
   async function runAll() {
     if (blockIfNotReady()) return;
     $('#msg').innerHTML = '<span class="muted">만드는 중…</span>';
-    try { await run(); await run2(); $('#msg').innerHTML = '<span class="good">두 파일을 만들었어요. 위에서 내려받으세요.</span>'; }
-    catch { $('#msg').innerHTML = '<span class="bad">만들지 못한 파일이 있어요. 위 안내를 확인해 주세요.</span>'; }
+    try {
+      await run(); await run2();
+      const yearly = state.usersFile || state.supportFile;
+      if (yearly) await run3();
+      $('#msg').innerHTML = `<span class="good">${yearly ? '실적 엑셀, 운영일지, 연간 기록 파일' : '두 파일'}을 만들었어요. 위에서 내려받으세요.</span>`;
+    } catch { $('#msg').innerHTML = '<span class="bad">만들지 못한 파일이 있어요. 위 안내를 확인해 주세요.</span>'; }
+  }
+
+  // ── 만들기: 연간 기록 파일 (이용자현황 · 학업·자립·법률·의료지원) ──
+  const ymRange = () => { const { year, month } = ym(); const D = new Date(year, month, 0).getDate(); return { ms: `${year}-${String(month).padStart(2, '0')}-01`, me: `${year}-${String(month).padStart(2, '0')}-${D}` }; };
+  /** 그 달 재소자 이름과 나이(지난달 시트 → 이용자현황 입소 때 만나이 → 직접 입력 순) — 만들기 전 화면 표시용 */
+  function monthPeople() {
+    const { ms, me } = ymRange();
+    const adm = state.info?.admissions || [];
+    const names = [];
+    for (const e of adm) if (e.inDate <= me && (!e.end || e.end >= ms) && !names.includes(e.name)) names.push(e.name);
+    for (const m of state.moves) if (m.type === '입소' && m.include && m.name && !names.includes(m.name)) names.push(m.name);
+    const order = Object.keys(state.prevAges || {});
+    names.sort((a, b) => (order.indexOf(a) + 1 || 999) - (order.indexOf(b) + 1 || 999));
+    return names.map((n) => {
+      const mv = state.moves.find((m) => m.type === '입소' && m.name === n);
+      const fallback = state.prevAges?.[n] ?? (adm.filter((e) => e.name === n).pop()?.age || mv?.age || '');
+      return { name: n, age: state.ageEdits[n] ?? String(fallback ?? ''), from: state.ageEdits[n] != null ? '직접' : state.prevAges?.[n] != null ? '지난달 시트' : fallback ? '입소 때 나이' : '' };
+    });
+  }
+  function renderAges() {
+    const box = $('#agesBox');
+    if (!state.usersFile) { box.innerHTML = ''; return; }
+    const ppl = monthPeople();
+    box.innerHTML = ppl.length ? `<p class="small" style="margin:0 0 4px"><b>나이 확인</b> <span class="muted">— 나이대별 연인원에 쓰여요. 생일이 지났으면 고쳐 주세요.</span></p>
+      <div class="ages">${ppl.map((p) => `<label>${esc(p.name)} <input type="number" min="5" max="30" data-age="${esc(p.name)}" value="${esc(p.age)}"><span class="muted small">${esc(p.from)}</span></label>`).join('')}</div>` : '';
+    $$('#agesBox [data-age]').forEach((el) => el.addEventListener('input', () => { state.ageEdits[el.dataset.age] = el.value; state.result3 = null; $('#res3').innerHTML = ''; renderMake(); }));
+  }
+
+  async function run3() {
+    const out = $('#res3');
+    if (!state.usersFile && !state.supportFile) { out.innerHTML = '<p class="bad small">연간 기록 파일(이용자현황 / 학업·자립·법률·의료지원)을 먼저 넣어 주세요.</p>'; return; }
+    out.innerHTML = '<p class="muted">만드는 중…</p>';
+    try {
+      if (!state.result) await run();
+      const { year, month } = state.result;
+      const { ms, me } = ymRange();
+      const det = await Step1.residentsDetailFromBuffer(state.result.buffer);
+      const ageOf = (n, fb) => { const v = state.ageEdits[n] ?? state.prevAges?.[n] ?? fb; return v === '' || v == null ? null : Number(v); };
+      const order = Object.keys(state.prevAges || {});
+      const people = det.left.filter((e) => e.inDate <= me && (!e.end || e.end >= ms))
+        .map((e) => ({ name: e.name, age: ageOf(e.name, e.age), inDate: e.inDate, end: e.end }))
+        .sort((a, b) => ((order.indexOf(a.name) + 1 || 999) - (order.indexOf(b.name) + 1 || 999)) || (a.inDate < b.inDate ? -1 : 1));
+      const admits = det.left.filter((e) => e.inDate >= ms && e.inDate <= me).map((e) => ({ name: e.name, age: ageOf(e.name, e.age), cause: e.cause }));
+      const leaves = det.right.filter((e) => e.outDate >= ms && e.outDate <= me).map((e) => ({ name: e.name, reason: e.reason, indep: e.indep }));
+      const ages = Object.fromEntries(people.map((p) => [p.name, p.age]));
+      const links = [], notes = [];
+      if (state.usersFile) {
+        const r = await Yearly.buildUsers(state.usersFile, year, month, people, admits, leaves);
+        links.push([r.buffer, state.usersFile.name]); notes.push(...r.notes);
+      }
+      if (state.supportFile) {
+        const r = await Yearly.buildSupport(state.supportFile, year, month, state.result.sessions, ages);
+        links.push([r.buffer, state.supportFile.name]); notes.push(...r.notes);
+        notes.unshift(`지원 내역 ${month}월: ` + Object.entries(r.counts).map(([k, v]) => `${k} ${v}건`).join(', '));
+      }
+      state.result3 = true;
+      out.innerHTML = links.map(([buf, name]) => `<a class="btn dl" style="margin:0 6px 6px 0" href="${URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))}" download="${esc(name)}">⬇ ${esc(name)}</a>`).join('')
+        + `<p class="muted small" style="margin:4px 0 0">넣은 파일에 ${month}월 시트·묶음을 채운 새 파일이에요. 원래 파일은 바뀌지 않아요.</p>`
+        + (notes.length ? `<details open><summary>안내 ${notes.length}건</summary>${list(notes)}</details>` : '');
+      state.result3Files = links;
+    } catch (e) {
+      console.error(e);
+      out.innerHTML = `<p class="bad small">만들지 못했어요: ${esc(e.message)}</p>`;
+      throw e;
+    } finally { renderMake(); }
   }
 
   // ── 시작 ────────────────────────────────────────────────
@@ -626,13 +709,14 @@
     dz.addEventListener('drop', (e) => { e.preventDefault(); dz.classList.remove('over'); addFiles([...e.dataTransfer.files]); });
     $('#fileInput').addEventListener('change', (e) => { addFiles([...e.target.files]); e.target.value = ''; });
     $('#clear').addEventListener('click', () => {
-      Object.assign(state, { personal: [], templates: [], parsed: [], info: null, moves: [], rosterFile: null, roster: null, logTpl: null, hwpWarn: false, outreachFile: null, outreach: null, outreachEdits: {}, manualEdits: {}, aftercareFile: null, aftercare: null });
+      Object.assign(state, { personal: [], templates: [], parsed: [], info: null, moves: [], rosterFile: null, roster: null, logTpl: null, hwpWarn: false, outreachFile: null, outreach: null, outreachEdits: {}, manualEdits: {}, aftercareFile: null, aftercare: null, usersFile: null, supportFile: null, prevAges: {}, ageEdits: {} });
       clearResults(); renderAll();
     });
     $('#addIn').addEventListener('click', () => addManualMove('입소'));
     $('#addOut').addEventListener('click', () => addManualMove('퇴소'));
     $('#make1').addEventListener('click', () => { if (!blockIfNotReady()) { $('#msg').innerHTML = ''; run().catch(() => {}); } });
     $('#make2').addEventListener('click', () => { if (!blockIfNotReady()) { $('#msg').innerHTML = ''; run2().catch(() => {}); } });
+    $('#make3').addEventListener('click', () => { if (!blockIfNotReady()) { $('#msg').innerHTML = ''; run3().catch(() => {}); } });
     $('#makeAll').addEventListener('click', runAll);
     RulesUI.init({
       getSessions: () => state.sessions || [],

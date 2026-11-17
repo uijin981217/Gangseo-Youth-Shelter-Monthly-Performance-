@@ -124,6 +124,9 @@
 
   /* 만들기 */
   .outs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .out-wide { grid-column: 1 / -1; }
+  .ages { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13.5px; }
+  .ages label { display: inline-flex; align-items: center; gap: 4px; } .ages input { width: 54px; }
   .out { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
   .out .head { display: flex; align-items: center; gap: 8px; font-weight: 600; }
   .out .head .badge { margin-left: auto; }
@@ -185,6 +188,7 @@
       <div class="slot" id="slotLog"></div>
       <div class="slot" id="slotOutreach"></div>
       <div class="slot" id="slotAftercare"></div>
+      <div class="slot" id="slotYearly"></div>
     </div>
     <div id="nameBox" class="namebox"></div>
     <div class="row between" style="margin-top:10px">
@@ -276,9 +280,16 @@
         <div class="row"><button id="make2" class="btn">이것만 만들기</button></div>
         <div id="res2" class="result"></div>
       </div>
+      <div class="out out-wide" id="out3">
+        <div class="head"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></svg>연간 기록 파일 (이용자현황 · 학업·자립·법률·의료지원)<span id="st3"></span></div>
+        <p class="desc" id="desc3">「2026년 이용자현황」, 「2026년 학업, 자립, 법률,의료지원」 파일을 넣으면 그 달 시트·묶음을 채워요</p>
+        <div id="agesBox"></div>
+        <div class="row"><button id="make3" class="btn">이것만 만들기</button></div>
+        <div id="res3" class="result"></div>
+      </div>
     </div>
     <div class="cta"><button id="makeAll" class="btn primary">
-      <svg class="i" viewBox="0 0 24 24"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/><path d="M7 11l5 5 5-5"/><path d="M12 4v12"/></svg>두 파일 한 번에 만들기</button></div>
+      <svg class="i" viewBox="0 0 24 24"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/><path d="M7 11l5 5 5-5"/><path d="M12 4v12"/></svg>한 번에 모두 만들기</button></div>
     <div id="msg" class="msg"></div>
   </section>
 
@@ -291,6 +302,7 @@
 <script src="js/rules.js"></script>
 <script src="js/outreach.js"></script>
 <script src="js/aftercare.js"></script>
+<script src="js/yearly.js"></script>
 <script src="js/naming.js"></script>
 <script src="js/roster.js"></script>
 <script src="js/step2.js"></script>
