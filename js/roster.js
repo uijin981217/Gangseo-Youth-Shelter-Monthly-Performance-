@@ -38,8 +38,8 @@
       const t = text(c.value);
       const wn = t.match(/주말\s*야간\s*근무\s*(\d{1,2})\s*시\s*~\s*(?:익일)?\s*(\d{1,2})\s*시/);
       if (wn) weekendNight = { start: hour(wn[1]), end: hour(wn[2]) };
-      const hd = t.match(/([\d,\s]+)\s*일\s*공휴일/);
-      if (hd) holidayDays = hd[1].split(/[,\s]+/).filter(Boolean).map(Number);
+      const hd = t.match(/([\d일,\s]+)공휴일/);        // '24,25,26일 공휴일', '5일, 9일 공휴일' 모두
+      if (hd) holidayDays = (hd[1].match(/\d{1,2}/g) || []).map(Number);
     }));
 
     const days = new Date(year, month, 0).getDate();
