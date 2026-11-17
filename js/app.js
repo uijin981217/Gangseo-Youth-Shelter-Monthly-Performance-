@@ -197,6 +197,37 @@
     state.sessions = Step1.buildSessions(state.parsed.flatMap((p) => p.records));   // 규칙 미리보기용
     rebuildMoves();
     renderAll();
+    refreshEdu();
+  }
+  // 학업지원 문구: 지난 기록에서 찾은 자세한 문구를 보여 주고, 고친 문구는 이 PC가 기억(다음 달에도 같은 제목이면 그대로)
+  const DMEM = 'shelter-edu-detail-v1';
+  const dmemLoad = () => { try { return JSON.parse(localStorage.getItem(DMEM) || '{}') || {}; } catch { return {}; } };
+  const dmemSet = (k, v) => { try { const m = dmemLoad(); if (v) m[k] = v; else delete m[k]; localStorage.setItem(DMEM, JSON.stringify(m)); } catch { /* 무시 */ } };
+  let eduSeq = 0;
+  async function refreshEdu() {
+    const my = ++eduSeq; state.eduRows = [];
+    if (state.ySupport && state.sessions?.length) {
+      const { year, month } = ym();
+      try { const rows = await Yearly.eduPreview(state.ySupport.file, year, month, state.sessions); if (my === eduSeq) state.eduRows = rows; } catch (e) { console.warn(e); }
+    }
+    if (my === eduSeq) renderEdu();
+  }
+  function renderEdu() {
+    const box = $('#eduBox'); if (!box) return;
+    const rows = state.eduRows || [];
+    if (!rows.length) { box.innerHTML = ''; return; }
+    const mem = dmemLoad(), miss = rows.filter((r) => !mem[r.key] && !r.how).length;
+    box.innerHTML = `<details ${miss ? 'open' : ''} class="edu"><summary class="small"><b>학업지원 상세내역 문구</b> <span class="muted">— 지난달까지 쓴 기록에서 찾아 채웠어요. 고치면 이 PC가 기억해요${miss ? ` · <b class="bad">${miss}줄은 지난 기록이 없어 그대로예요</b>` : ''}</span></summary>
+      <table class="edu-t"><thead><tr><th>이름</th><th>서비스</th><th>개인 파일 제목</th><th>지원 내역에 쓸 문구</th></tr></thead><tbody>
+      ${rows.map((r) => `<tr><td>${esc(r.name)}</td><td class="small">${esc(r.svc)}</td><td class="small muted">${esc(r.title)}${r.n > 1 ? ` ×${r.n}` : ''}</td>
+        <td><input data-edu="${esc(r.key)}" value="${esc(mem[r.key] ?? r.auto)}" placeholder="${esc(r.auto)}" class="${!mem[r.key] && !r.how ? 'miss' : ''}"><span class="small muted">${mem[r.key] ? '직접' : r.how === 'history' ? '지난 기록' : r.how === 'rule' ? '자동' : ''}</span></td></tr>`).join('')}
+      </tbody></table>
+      <p class="small muted" style="margin:4px 0 0">예) 등교지도 → 「OO고등학교 2학년 3반 등교」. 지운 칸은 자동 문구로 돌아가요.</p></details>`;
+    $$('#eduBox [data-edu]').forEach((el) => el.addEventListener('change', () => {
+      const r = rows.find((x) => x.key === el.dataset.edu);
+      const v = el.value.trim(); dmemSet(el.dataset.edu, v && v !== r?.auto ? v : '');
+      state.result3 = null; $('#res3').innerHTML = ''; renderEdu(); renderMake();
+    }));
   }
   const unnamed = () => state.parsed.filter((p) => p.raw && !p.person);
 
@@ -701,7 +732,7 @@
         links.push([r.buffer, state.yUsers.file.name, 'users']); notes.push(...r.notes);
       }
       if (state.ySupport) {
-        const r = await Yearly.buildSupport(state.ySupport.file, year, month, state.result.sessions, ages);
+        const r = await Yearly.buildSupport(state.ySupport.file, year, month, state.result.sessions, ages, { overrides: dmemLoad() });
         links.push([r.buffer, state.ySupport.file.name, 'support']); notes.push(...r.notes);
         notes.unshift(`지원 내역 ${month}월: ` + Object.entries(r.counts).map(([k, v]) => `${k} ${v}건`).join(', '));
       }

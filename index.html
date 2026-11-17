@@ -127,6 +127,13 @@
   .out-wide { grid-column: 1 / -1; }
   .ages { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13.5px; }
   .ages label { display: inline-flex; align-items: center; gap: 4px; } .ages input { width: 54px; }
+  .edu { margin: 8px 0; } .edu summary { cursor: pointer; }
+  .edu-t { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 13.5px; }
+  .edu-t th, .edu-t td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--line, #e5e5e5); vertical-align: middle; }
+  .edu-t td:nth-child(1), .edu-t td:nth-child(2) { white-space: nowrap; } .edu-t td:nth-child(3) { width: 28%; }
+  .edu-t td:last-child { width: 50%; } .edu-t td:last-child span { display: block; font-size: 11.5px; }
+  .edu-t input { width: 100%; box-sizing: border-box; } .edu-t input.miss { border-color: #d97706; }
+  @media (max-width: 900px) { .edu-t th:nth-child(3), .edu-t td:nth-child(3) { display: none; } .edu-t td:last-child { width: auto; } }
   .out { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
   .out .head { display: flex; align-items: center; gap: 8px; font-weight: 600; }
   .out .head .badge { margin-left: auto; }
@@ -284,6 +291,7 @@
         <div class="head"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></svg>연간 기록 파일 (이용자현황 · 학업·자립·법률·의료지원)<span id="st3"></span></div>
         <p class="desc" id="desc3">「2026년 이용자현황」, 「2026년 학업, 자립, 법률,의료지원」 파일을 넣으면 그 달 시트·묶음을 채워요</p>
         <div id="agesBox"></div>
+        <div id="eduBox"></div>
         <div class="row"><button id="make3" class="btn">이것만 만들기</button></div>
         <div id="res3" class="result"></div>
       </div>

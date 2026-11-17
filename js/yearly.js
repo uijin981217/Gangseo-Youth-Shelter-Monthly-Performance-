@@ -164,6 +164,90 @@
     return `${head} - ${m[2].trim()}`;
   }
 
+  // ── 학업지원 문구 다듬기 ─────────────────────────────────
+  // 개인 파일 제목은 짧게('등교지도', '보컬레슨', '검정고시 학습지도_국어') 적히는데, 지원 내역엔
+  // 선생님들이 'OO고등학교 2학년 3반 등교'처럼 자세히 써 왔음 → 같은 파일의 지난 기록에서 그 아이의 문구를 찾아 씀
+  const EDU = '학업지원';
+  const SUBJ = /^(국어|수학|영어|사회|과학|한국사|도덕|체육|기술가정|기가|미술|음악|역사|정보|전과목)$/;
+  const cleanSp = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+  const coreTokens = (s) => cleanSp(String(s).replace(/[_\-–(),·.]/g, ' ')).split(' ').filter((w) => w.length >= 2 && !/^(수업|수강|참여|참석|지도|학습지도|및|등)$/.test(w));
+  /** 학업지원 시트에 손으로 쓴 지난 기록: [{name, svc, detail, y, m, row}] (오래된 것 → 최근 순) */
+  function eduHistory(wb) {
+    const ws = wb.getWorksheet(EDU); if (!ws) return [];
+    const out = []; let y = 0, m = 0;
+    for (let r = 1; r <= ws.rowCount; r++) {
+      const row = ws.getRow(r);
+      const h = T(row.getCell(1).value).match(/^(\d{4})\s*년\s*(\d{1,2})\s*월/);
+      if (h) { y = +h[1]; m = +h[2]; continue; }
+      const name = T(row.getCell(3).value), svc = cleanSp(T(row.getCell(4).value)), detail = cleanSp(T(row.getCell(5).value));
+      if (!y || !name || name === '이름' || !detail) continue;
+      out.push({ name, svc, detail, y, m, row: r });
+    }
+    return out.sort((a, b) => a.y - b.y || a.m - b.m || a.row - b.row);
+  }
+  /** 검정고시 단계: 지난 기록·이번 달 다른 기록에서 '중졸/고졸/초졸' 찾기 */
+  function examLevel(name, hist, sessions) {
+    const texts = [...hist.filter((h) => h.name === name).map((h) => h.detail), ...sessions.filter((s) => (s.people || [s.name]).includes(name)).map((s) => s.title)];
+    for (let i = texts.length - 1; i >= 0; i--) {
+      const t = String(texts[i]);
+      const m = t.match(/(초졸|중졸|고졸)/) || t.match(/(초등학교|중학교|고등학교)\s*졸업/);
+      if (m) return { 초등학교: '초졸', 중학교: '중졸', 고등학교: '고졸' }[m[1]] || m[1];
+    }
+    return '';
+  }
+  /** 기록 하나의 상세내역 → 손으로 쓴 것처럼. 반환 { text, how } (how: 'history'|'rule'|'' ) */
+  function eduDetail(it, hist, sessions) {
+    const base = detailText(it.title);
+    const mine = hist.filter((h) => h.name === it.name && h.svc === it.svc);
+    const latest = (pred) => { for (let i = mine.length - 1; i >= 0; i--) if (pred(mine[i].detail)) return mine[i].detail; return ''; };
+    // 1) 등교지도 → 지난 기록의 'OO학교 O학년 O반 등교'
+    if (/^등교(지도)?$/.test(base.replace(/\s/g, ''))) {
+      const d = latest((t) => /등교$/.test(t) && t.length > 3);
+      return d ? { text: d, how: 'history' } : { text: base, how: '' };
+    }
+    // 2) 검정고시 학습지도_국어 → '고졸 검정고시 국어 문제 풀이'
+    const subj = base.replace(/^검정고시\s*(학습지도|학습|대비)?\s*[-–]?\s*/, '');
+    const subs = subj.split(/\s*[,·및]\s*|\s+/).filter(Boolean);
+    if (/검정고시/.test(it.svc + it.title) && subs.length && subs.every((w) => SUBJ.test(w))) {
+      const lv = examLevel(it.name, hist, sessions);
+      return { text: `${lv ? lv + ' ' : ''}검정고시 ${subs.join(', ')} 문제 풀이`, how: 'rule' };
+    }
+    // 3) 그 밖: 제목의 낱말이 모두 들어 있는 그 아이의 최근 기록 (보컬레슨 → 'OO역 인근 연습실에서 보컬레슨')
+    const tok = coreTokens(base);
+    if (tok.length) {
+      const d = latest((t) => tok.every((w) => t.includes(w)));
+      if (d) return { text: d, how: 'history' };
+      // 긴 고유 낱말(기관·장소 이름)만 같아도 같은 활동으로 봄: '보컬수업 수강_OO아카데미'
+      const long = tok.filter((w) => w.length >= 5 && !SUBJ.test(w));
+      const d2 = long.length ? latest((t) => long.some((w) => t.includes(w))) : '';
+      if (d2) return { text: d2, how: 'history' };
+    }
+    // 4) 기록이 없으면 손글씨 순서로: '작곡 수업 수강 - OO청소년센터' → 'OO청소년센터 작곡 수업 참여'
+    let t = base;
+    const m = t.match(/^(.+?)\s+-\s+(.+)$/);
+    if (m && /(센터|학원|아카데미|학교|대학|역|연습실|도서관|꿈드림|친구랑)/.test(m[2])) t = `${m[2]} ${m[1].replace(/수강$/, '참여')}`;
+    t = t.replace(/^고등\s/, '고등학교 ').replace(/문제풀이/g, '문제 풀이');
+    return { text: t, how: t !== base ? 'rule' : '' };
+  }
+  const detailKey = (name, svc, title) => `${name}|${svc}|${String(title || '').replace(/\s+/g, '')}`;
+  /** 화면 표시용: 이 달 학업지원 문구 (같은 아이·서비스·제목은 한 줄로) */
+  async function eduPreview(file, year, month, sessions) {
+    const wb = new ExcelJS.Workbook(); await wb.xlsx.load(await file.arrayBuffer());
+    const hist = eduHistory(wb).filter((h) => h.y < year || (h.y === year && h.m < month));
+    const ym = `${year}-${p2(month)}`, map = SHEETS[EDU], seen = new Map();
+    for (const s of sessions) {
+      if (!s.date.startsWith(ym) || !(s.key in map)) continue;
+      for (const name of s.people || [s.name]) {
+        const it = { name, svc: map[s.key], title: s.title };
+        const k = detailKey(name, it.svc, s.title);
+        if (seen.has(k)) { seen.get(k).n++; continue; }
+        const d = eduDetail(it, hist, sessions);
+        seen.set(k, { key: k, name, svc: it.svc, title: cleanSp(s.title), auto: d.text, how: d.how, n: 1 });
+      }
+    }
+    return [...seen.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.svc < b.svc ? -1 : 1));
+  }
+
   function findBlocks(ws) {
     const heads = [];
     for (let r = 1; r <= ws.rowCount; r++) { const t = T(ws.getRow(r).getCell(1).value); const m = t.match(/^(\d{4})\s*년\s*(\d{1,2})\s*월/); if (m) heads.push({ row: r, year: Number(m[1]), month: Number(m[2]), text: t }); }
@@ -175,17 +259,23 @@
     return last;
   }
 
-  async function buildSupport(file, year, month, sessions, ages) {
+  async function buildSupport(file, year, month, sessions, ages, opts = {}) {
     const wb = new ExcelJS.Workbook(); await wb.xlsx.load(await file.arrayBuffer());
     const notes = [], counts = {};
     const ym = `${year}-${p2(month)}`;
+    const hist = eduHistory(wb).filter((h) => h.y < year || (h.y === year && h.m < month));
+    const overrides = opts.overrides || {};
     for (const [sheetName, map] of Object.entries(SHEETS)) {
       const ws = wb.getWorksheet(sheetName);
       if (!ws) { notes.push(`'${sheetName}' 시트가 없어서 건너뛰었어요`); continue; }
       const items = [];
       for (const s of sessions) {
         if (!s.date.startsWith(ym) || !(s.key in map)) continue;
-        for (const name of s.people || [s.name]) items.push({ date: s.date, time: s.time || '', name, svc: map[s.key], detail: detailText(s.title), title: s.title, key: s.key });
+        for (const name of s.people || [s.name]) {
+          const it = { date: s.date, time: s.time || '', name, svc: map[s.key], detail: detailText(s.title), title: s.title, key: s.key };
+          if (sheetName === EDU) { const o = overrides[detailKey(name, it.svc, s.title)]; it.detail = o != null && cleanSp(o) ? cleanSp(o) : eduDetail(it, hist, sessions).text; }
+          items.push(it);
+        }
       }
       items.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
       counts[sheetName] = items.length;
@@ -272,5 +362,5 @@
     return { buffer: await wb.xlsx.writeBuffer(), notes, counts };
   }
 
-  global.Yearly = { isUsersFile, isSupportFile, previousAges, buildUsers, buildSupport, detailText };
+  global.Yearly = { isUsersFile, isSupportFile, previousAges, buildUsers, buildSupport, detailText, eduPreview, detailKey };
 })(window);
