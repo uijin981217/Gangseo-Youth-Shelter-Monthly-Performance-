@@ -150,7 +150,9 @@
     의료지원: { '의약품·의약외품': '의약품·의약외품', 진단및치료: '진단 및 치료', 건강관리: '건강관리', 건강검진: '건강검진' },
     자립지원: { 취업: '아르바이트 출근지도', 홀로서기: '홀로서기' },
     학업지원: { 학업지원: '학업지원', 특기적성교육지원: '특기적성 교육지원', 기초학습: '기초학습', 검정고시학업지원: '검정고시 학업지원', 검정고시: '검정고시', 학업관련비용지원: '학업관련비용 지원' },
-    상담정서지원: { '개인상담-대면': '대면상담', '개인상담-전화': '전화상담', '개인상담-사이버': '사이버상담', '개인상담-외부기관': '외부기관상담', 가족상담: '가족상담' },
+    상담정서지원: { '개인상담-대면': '대면상담', '개인상담-전화': '전화상담', '개인상담-사이버': '사이버상담', '개인상담-외부기관': '외부기관상담', 가족상담: '가족상담',
+      // 심리검사는 넣지 않음(쉼터 방침). 상담은 전부: 활동중심상담(마음놀이터)·집단상담도 넣음 (반갑다친구야·치료·예방교육 프로그램은 상담이 아니라 뺌)
+      마음놀이터: '마음놀이터', '너,나우리집단상담': '집단상담' },
     법률지원: { 법률구제지원: '법률구제지원' },
   };
   /** 제목 → 상세내역: 서비스 이름 머리말은 떼고, 그 밖의 '○○_'는 '○○ - '로 */
@@ -346,6 +348,7 @@
     t = t.replace(/(\S+)\s+\1(?=\s)/g, '$1');                                       // '입소 입소' → '입소'
     t = cleanSp(t);
     t = t.replace(new RegExp(`^${it.name}\\s*-\\s*`), '');                          // '자기이름 - 내용' → '내용'
+    t = t.replace(new RegExp(`\\s*[-_]\\s*${it.name}$`), '');                        // '활동중심상담(마음놀이터)_자기이름' → 이름 떼기
     if (new RegExp(`^${it.name}\\s*담임`).test(t)) {                                 // '자기이름 담임선생님' → 'OO중학교 담임선생님'
       const sc = schoolOf(it.name, sessions).replace(/\s*\d\s*학년.*$/, '');
       t = t.replace(new RegExp(`^${it.name}\\s*`), sc ? `${sc} ` : '');
@@ -356,6 +359,10 @@
       .replace(/정신과진료/g, '정신과 진료').replace(/진료예약/g, '진료 예약').replace(/폭력피해/g, '폭력 피해').replace(/입소생간/g, '입소생 간');
     t = cleanSp(t);
     return { text: t, how: t !== base ? 'rule' : '' };
+  }
+  /** 지원 내역에 넣지 않을 기록: 상담정서지원엔 심리검사는 빼고 상담은 전부 (개인상담으로 잘못 넣은 '심리검사_…' 제목도 뺌) */
+  function skipSession(sheet, s) {
+    return sheet === '상담정서지원' && /^\s*(\(\S+\)\s*)?심리\s*검사/.test(String(s.title || ''));
   }
   /** 기록 하나의 상세내역 → 손으로 쓴 것처럼. 반환 { text, how } (how: 'history'|'rule'|'' ) */
   function polishDetail(sheet, it, hist, sessions) {
@@ -377,7 +384,7 @@
     for (const sheet of POLISH) {
       const map = SHEETS[sheet];
       for (const s of sessions) {
-        if (!s.date.startsWith(ym) || !(s.key in map)) continue;
+        if (!s.date.startsWith(ym) || !(s.key in map) || skipSession(sheet, s)) continue;
         for (const name of s.people || [s.name]) {
           const it = { name, svc: map[s.key], title: s.title };
           const k = detailKey(name, it.svc, s.title);
@@ -413,7 +420,7 @@
       if (!ws) { notes.push(`'${sheetName}' 시트가 없어서 건너뛰었어요`); continue; }
       const items = [];
       for (const s of sessions) {
-        if (!s.date.startsWith(ym) || !(s.key in map)) continue;
+        if (!s.date.startsWith(ym) || !(s.key in map) || skipSession(sheetName, s)) continue;
         for (const name of s.people || [s.name]) {
           const it = { date: s.date, time: s.time || '', name, svc: map[s.key], detail: detailText(s.title), title: s.title, key: s.key };
           if (POLISH.includes(sheetName)) { const o = overrides[detailKey(name, it.svc, s.title)]; it.detail = o != null && cleanSp(o) ? cleanSp(o) : polishDetail(sheetName, it, hist, sessions).text; }
