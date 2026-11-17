@@ -90,7 +90,8 @@
       catch (e) { state.info = { error: e.message, manual: [], residents: [], admissions: [], discharges: [] }; }
     }
     state.prevAges = {};
-    if (state.usersFile) { try { state.prevAges = await Yearly.previousAges(state.usersFile, month); } catch { state.prevAges = {}; } }
+    state.yUsers = yearlyFile('users'); state.ySupport = yearlyFile('support');
+    if (state.yUsers) { try { state.prevAges = await Yearly.previousAges(state.yUsers.file, month); } catch { state.prevAges = {}; } }
     state.aftercare = null;
     if (state.aftercareFile) {
       try { state.aftercare = await Aftercare.parseAftercare(state.aftercareFile, year, month); }
@@ -126,6 +127,26 @@
     } catch { return false; }
   }
   function memForget() { try { localStorage.removeItem(MEM_KEY); } catch { /* 무시 */ } }
+
+  // 연간 기록 파일(이용자현황 · 지원 내역)도 마지막으로 만든 것을 기억 → 다음 달엔 개인 파일만 넣으면 됨
+  const YMEM = 'shelter-yearly-memory-v1';
+  const ymemLoad = () => { try { return JSON.parse(localStorage.getItem(YMEM) || '{}') || {}; } catch { return {}; } };
+  function ymemSave(kind, name, buffer, y, m) {
+    try {
+      const mem = ymemLoad();
+      let bin = ''; const u = new Uint8Array(buffer); for (let i = 0; i < u.length; i += 0x8000) bin += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+      mem[kind] = { name, b64: btoa(bin), ym: ymKey(y, m), savedAt: new Date().toISOString() };
+      localStorage.setItem(YMEM, JSON.stringify(mem));
+      return true;
+    } catch { return false; }
+  }
+  /** 'users' | 'support' → 넣은 파일이 우선, 없으면 이 PC가 기억한 파일 */
+  function yearlyFile(kind) {
+    const up = kind === 'users' ? state.usersFile : state.supportFile;
+    if (up) return { file: up, from: 'upload' };
+    const m = ymemLoad()[kind];
+    return m?.b64 ? { file: b64ToFile(m.b64, m.name), from: 'memory', ym: m.ym } : null;
+  }
 
   async function summaryTemplate(year, month) {
     if (state.templates.length) {
@@ -281,12 +302,14 @@
     slot('#slotLog', ICON.doc, '운영일지 양식', state.logTpl ? badge('ok', '넣은 양식') : badge('mute', '선택 · 내장 양식'), '예: 쉼터운영일지 2026 n월.hwpx', logBody);
 
     const o = state.outreach;
-    const yf = [state.usersFile, state.supportFile].filter(Boolean);
+    const yf = [['yUsers', 'usersFile'], ['ySupport', 'supportFile']].filter(([k]) => state[k]);
+    const memLabel = (y) => `${esc(y.file.name)} <span class="muted small">· 이 PC가 기억 (${Number(y.ym.slice(5))}월까지)</span>`;
     slot('#slotYearly', ICON.sheet, '연간 기록 파일',
-      yf.length ? badge('ok', `${yf.length}개`) : badge('mute', '선택'),
-      '예: 2026년 이용자현황.xlsx · 2026년 학업, 자립, 법률,의료지원.xlsx',
-      yf.length ? [['usersFile', '이용자현황'], ['supportFile', '지원 내역']].filter(([k]) => state[k]).map(([k, l]) => `<div>${esc(state[k].name)} <button class="x" title="빼기" data-rm-y="${k}">×</button></div>`).join('')
-        : '<span class="muted small">넣으면 그 달 시트·묶음을 채워서 돌려줘요</span>');
+      yf.length ? badge('ok', yf.some(([k]) => state[k].from === 'memory') ? '기억된 파일 사용' : `${yf.length}개`) : badge('mute', '선택'),
+      '처음 한 번만 넣으면 돼요 — 다음 달부터는 이 PC가 기억해요',
+      yf.length ? yf.map(([k, up]) => `<div>${state[k].from === 'memory' ? memLabel(state[k]) : esc(state[k].file.name)}${state[k].from === 'upload' ? ` <button class="x" title="빼기" data-rm-y="${up}">×</button>` : ''}</div>`).join('')
+          + (yf.some(([k]) => state[k].from === 'memory') ? '<button class="link danger" id="forgetYearly">기억 지우기</button>' : '')
+        : '<span class="muted small">2026년 이용자현황.xlsx · 2026년 학업, 자립, 법률,의료지원.xlsx</span>');
 
     const ac = state.aftercare;
     const acDates = ac?.entries ? [...new Set(ac.entries.map((e) => `${Number(e.date.slice(5, 7))}/${Number(e.date.slice(8, 10))}`))] : [];
@@ -315,6 +338,7 @@
     $('#rmOutreach')?.addEventListener('click', () => { state.outreachFile = null; state.outreachEdits = {}; reload(); });
     $('#rmAftercare')?.addEventListener('click', () => { state.aftercareFile = null; reload(); });
     $$('[data-rm-y]').forEach((b) => b.addEventListener('click', () => { state[b.dataset.rmY] = null; reload(); }));
+    $('#forgetYearly')?.addEventListener('click', () => { if (!confirm('이 PC가 기억하는 연간 기록 파일을 지울까요? 다음엔 파일을 직접 넣어야 해요.')) return; try { localStorage.removeItem('shelter-yearly-memory-v1'); } catch { /* 무시 */ } reload(); });
     $('#rmLog')?.addEventListener('click', () => { state.logTpl = null; renderAll(); });
     $('#fileCount').textContent = `개인 ${p.length} · 실적 ${t.length} · 근무표 ${state.rosterFile ? 1 : 0} · 일지 양식 ${state.logTpl ? 1 : 0} · 아웃리치 ${state.outreachFile ? 1 : 0} · 사후관리 ${state.aftercareFile ? 1 : 0}`;
   }
@@ -519,7 +543,7 @@
     const need = !state.personal.length ? '개인 파일 필요' : unnamed().length ? '이름 확인 필요' : '';
     $('#st1').innerHTML = state.result ? badge('ok', '완료') : need ? badge('mute', need) : badge('ok', '준비됨');
     $('#st2').innerHTML = state.result2 ? badge('ok', '완료') : need ? badge('mute', need) : badge('ok', '준비됨');
-    $('#st3').innerHTML = state.result3 ? badge('ok', '완료') : !(state.usersFile || state.supportFile) ? badge('mute', '파일 넣으면 만들어요') : need ? badge('mute', need) : badge('ok', '준비됨');
+    $('#st3').innerHTML = state.result3 ? badge('ok', '완료') : !(state.yUsers || state.ySupport) ? badge('mute', '파일 넣으면 만들어요') : need ? badge('mute', need) : badge('ok', '준비됨');
     const roster = state.roster && !state.roster.error;
     $('#desc2').textContent = `날짜별 표 · 입소생 · 영역별 내용 · 근무자 ${roster ? '(근무표로 채움)' : '(근무표 없으면 비어 있음)'}`;
   }
@@ -622,7 +646,7 @@
     $('#msg').innerHTML = '<span class="muted">만드는 중…</span>';
     try {
       await run(); await run2();
-      const yearly = state.usersFile || state.supportFile;
+      const yearly = state.yUsers || state.ySupport;
       if (yearly) await run3();
       $('#msg').innerHTML = `<span class="good">${yearly ? '실적 엑셀, 운영일지, 연간 기록 파일' : '두 파일'}을 만들었어요. 위에서 내려받으세요.</span>`;
     } catch { $('#msg').innerHTML = '<span class="bad">만들지 못한 파일이 있어요. 위 안내를 확인해 주세요.</span>'; }
@@ -647,7 +671,7 @@
   }
   function renderAges() {
     const box = $('#agesBox');
-    if (!state.usersFile) { box.innerHTML = ''; return; }
+    if (!state.yUsers) { box.innerHTML = ''; return; }
     const ppl = monthPeople();
     box.innerHTML = ppl.length ? `<p class="small" style="margin:0 0 4px"><b>나이 확인</b> <span class="muted">— 나이대별 연인원에 쓰여요. 생일이 지났으면 고쳐 주세요.</span></p>
       <div class="ages">${ppl.map((p) => `<label>${esc(p.name)} <input type="number" min="5" max="30" data-age="${esc(p.name)}" value="${esc(p.age)}"><span class="muted small">${esc(p.from)}</span></label>`).join('')}</div>` : '';
@@ -656,7 +680,7 @@
 
   async function run3() {
     const out = $('#res3');
-    if (!state.usersFile && !state.supportFile) { out.innerHTML = '<p class="bad small">연간 기록 파일(이용자현황 / 학업·자립·법률·의료지원)을 먼저 넣어 주세요.</p>'; return; }
+    if (!state.yUsers && !state.ySupport) { out.innerHTML = '<p class="bad small">연간 기록 파일(이용자현황 / 학업·자립·법률·의료지원)을 먼저 넣어 주세요.</p>'; return; }
     out.innerHTML = '<p class="muted">만드는 중…</p>';
     try {
       if (!state.result) await run();
@@ -672,16 +696,18 @@
       const leaves = det.right.filter((e) => e.outDate >= ms && e.outDate <= me).map((e) => ({ name: e.name, reason: e.reason, indep: e.indep }));
       const ages = Object.fromEntries(people.map((p) => [p.name, p.age]));
       const links = [], notes = [];
-      if (state.usersFile) {
-        const r = await Yearly.buildUsers(state.usersFile, year, month, people, admits, leaves);
-        links.push([r.buffer, state.usersFile.name]); notes.push(...r.notes);
+      if (state.yUsers) {
+        const r = await Yearly.buildUsers(state.yUsers.file, year, month, people, admits, leaves);
+        links.push([r.buffer, state.yUsers.file.name, 'users']); notes.push(...r.notes);
       }
-      if (state.supportFile) {
-        const r = await Yearly.buildSupport(state.supportFile, year, month, state.result.sessions, ages);
-        links.push([r.buffer, state.supportFile.name]); notes.push(...r.notes);
+      if (state.ySupport) {
+        const r = await Yearly.buildSupport(state.ySupport.file, year, month, state.result.sessions, ages);
+        links.push([r.buffer, state.ySupport.file.name, 'support']); notes.push(...r.notes);
         notes.unshift(`지원 내역 ${month}월: ` + Object.entries(r.counts).map(([k, v]) => `${k} ${v}건`).join(', '));
       }
       state.result3 = true;
+      const kept = links.map(([buf, name, kind]) => ymemSave(kind, name, buf, year, month)).every(Boolean);
+      notes.push(kept ? `이 PC가 ${month}월까지 채운 연간 기록 파일을 기억했어요 — 다음 달엔 개인 파일만 넣으면 돼요` : '이 브라우저에는 연간 기록 파일을 기억할 수 없어요 — 내려받은 파일을 다음 달에 넣어 주세요');
       out.innerHTML = links.map(([buf, name]) => `<a class="btn dl" style="margin:0 6px 6px 0" href="${URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))}" download="${esc(name)}">⬇ ${esc(name)}</a>`).join('')
         + `<p class="muted small" style="margin:4px 0 0">넣은 파일에 ${month}월 시트·묶음을 채운 새 파일이에요. 원래 파일은 바뀌지 않아요.</p>`
         + (notes.length ? `<details open><summary>안내 ${notes.length}건</summary>${list(notes)}</details>` : '');
@@ -710,6 +736,7 @@
     $('#fileInput').addEventListener('change', (e) => { addFiles([...e.target.files]); e.target.value = ''; });
     $('#clear').addEventListener('click', () => {
       Object.assign(state, { personal: [], templates: [], parsed: [], info: null, moves: [], rosterFile: null, roster: null, logTpl: null, hwpWarn: false, outreachFile: null, outreach: null, outreachEdits: {}, manualEdits: {}, aftercareFile: null, aftercare: null, usersFile: null, supportFile: null, prevAges: {}, ageEdits: {} });
+      state.yUsers = yearlyFile('users'); state.ySupport = yearlyFile('support');
       clearResults(); renderAll();
     });
     $('#addIn').addEventListener('click', () => addManualMove('입소'));

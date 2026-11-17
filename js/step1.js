@@ -339,6 +339,9 @@
 
     for (const mv of moves.filter((x) => x.type === '입소')) {
       const ex = R.left.find((e) => e.name === mv.name && e.inDate === mv.date);
+      const open = R.left.find((e) => e.name === mv.name && !e.end && e.inDate < mv.date);
+      if (!ex && open && !moves.some((x) => x.type === '퇴소' && x.name === mv.name && x.date <= mv.date))
+        notes.push(`⚠ ${mv.name}: ${mv.date} 다시 입소인데, 이전 입소(${open.inDate})의 퇴소가 아직 없어요 — 퇴소상담 기록이 빠졌는지 확인하고 「입·퇴소」에서 퇴소를 추가해 주세요 (이용자현황에 두 번 잡혀요)`);
       if (ex) { setIfBlank(ex.row, L.age, mv.age); setIfBlank(ex.row, L.cause, mv.cause); setIfBlank(ex.row, L.school, mv.school); continue; }
       const prev = R.left[R.left.length - 1];
       const r = R.lastLeft + 1;

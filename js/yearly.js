@@ -23,7 +23,9 @@
   async function previousAges(file, month) {
     const wb = new ExcelJS.Workbook(); await wb.xlsx.load(await file.arrayBuffer());
     const ages = {};
-    for (let m = month - 1; m >= 1 && !Object.keys(ages).length; m--) {
+    const order = month === 1 ? [12] : Array.from({ length: month - 1 }, (_, i) => month - 1 - i);   // 1월이면 (작년에서 이어 쓰는) 12월 시트
+    for (const m of order) {
+      if (Object.keys(ages).length) break;
       const ws = sheetOfMonth(wb, m); if (!ws) continue;
       for (let r = 3; r <= 40; r++) { const t = T(ws.getRow(r).getCell(2).value); const x = t.match(/^(.+?)\s*\((\d{1,2})\)\s*$/); if (x) ages[x[1].trim()] = Number(x[2]); if (/입\s*소/.test(t)) break; }
     }
@@ -199,31 +201,40 @@
         notes.push(`${sheetName}: ${items.length}건을 표 끝에 이어 썼어요`);
         continue;
       }
-      // 본보기 = 올해 이 달 이전의 마지막 묶음(예: 2026년 8월). 그 아래에 남은 지난해 묶음(2025년 9~12월)은 하나씩 덮어쓰는 자리
+      // 작년 파일을 복사해서 쓰므로, 머리에 적힌 '연도'로 구분: 올해보다 앞선 연도 묶음 = 지난해에 남은 것(지움)
+      // 올해 이 달 묶음(다시 만들 때)도 지우고 새로 씀. 올해의 뒤 달 묶음이 이미 있으면 건드리지 않음
+      const isOld = (b) => b.year < year || (b.year === year && b.month === month);
+      if (blocks.some((b) => b.year === year && b.month > month)) { notes.push(`${sheetName}: ${month}월 뒤 달 묶음이 이미 있어서 그대로 뒀어요`); continue; }
       const prev = blocks.filter((b) => b.year === year && b.month < month).pop();
-      if (!prev) { notes.push(`${sheetName}: ${year}년 ${month}월 앞에 올해 묶음이 없어 본보기를 찾지 못했어요 — 건너뜀`); continue; }
-      const after = blocks.filter((b) => b.row > prev.row);
-      if (after.some((b) => b.year === year && b.month > month)) { notes.push(`${sheetName}: ${month}월 뒤 달 묶음이 이미 있어서 그대로 뒀어요`); continue; }
+      const model = prev || blocks[0];                               // 새해 1월이면 지난해 묶음을 서식 본보기로
       const nextOf = (row) => (blocks.find((b) => b.row > row) || { row: ws.rowCount + 2 }).row;
       const dataEnd = (from, until) => { let e = from; for (let r = from; r < until; r++) if (T(ws.getRow(r).getCell(3).value)) e = r; return e; };
-      const mHead = prev.row, mHdr = prev.row + 1, mData = prev.row + 2;
+      const mHead = model.row, mHdr = model.row + 1, mData = model.row + 2;
       const sty = { head: [1, 2, 3, 4, 5].map((c) => clone(ws.getRow(mHead).getCell(c).style)), headH: ws.getRow(mHead).height,
         hdr: [1, 2, 3, 4, 5].map((c) => ({ v: ws.getRow(mHdr).getCell(c).value, s: clone(ws.getRow(mHdr).getCell(c).style) })), hdrH: ws.getRow(mHdr).height,
         data: [1, 2, 3, 4, 5].map((c) => clone(ws.getRow(mData).getCell(c).style)), dataH: ws.getRow(mData).height };
-      // 보통 한 줄 띄우고 시작. 단, 덮어쓸 지난해 묶음 머리가 바로 아래 붙어 있으면 그 자리에서 시작
-      const firstAfter = after[0];
-      const start = Math.min(dataEnd(prev.row + 1, nextOf(prev.row)) + 2, firstAfter ? firstAfter.row : Infinity);
+      const modelText = model.text;
+      // 시작: 올해 지난달 묶음 한 줄 아래(지난해 묶음 머리가 바로 붙어 있으면 그 자리). 올해 묶음이 없으면 맨 위 묶음 자리
+      const firstOld = blocks.find((b) => (!prev || b.row > prev.row) && isOld(b));
+      let start = prev ? dataEnd(prev.row + 1, nextOf(prev.row)) + 2 : blocks[0].row;
+      if (firstOld && firstOld.row < start) start = firstOld.row;
       const end = start + 1 + items.length;
-      // 덮어쓸 자리의 지난해(또는 이전 실행) 내용 지우기: 우리 묶음이 끝난 뒤 다음 '남겨 둘' 묶음 머리 전까지
-      const keepHead = after.find((b) => b.row > end + 1 && !(b.year === year && b.month === month));
-      const clearTo = keepHead ? keepHead.row - 2 : Math.max(end, ws.rowCount);
+      // 지울 범위: start 부터 시트 끝까지 남은 지난해 내용 전부 (순서가 섞여 올해 묶음이 나오면 그 앞까지)
+      const keep = blocks.find((b) => b.row >= start && !isOld(b));
+      let lastUsed = end;
+      for (let r = start; r <= ws.rowCount; r++) for (let c = 1; c <= 5; c++) if (T(ws.getRow(r).getCell(c).value)) lastUsed = Math.max(lastUsed, r);
+      const clearTo = keep ? keep.row - 1 : lastUsed;
+      const removed = blocks.filter((b) => b.row >= start && b.row <= clearTo && b.year < year).map((b) => `${b.year}년 ${b.month}월`);
       for (const k of Object.keys(ws._merges || {})) { const m = ws._merges[k]; const top = m.top || 0; if (top >= start && top <= clearTo) { try { ws.unMergeCells(m.range || k); } catch { /* 무시 */ } } }
-      for (let r = start; r <= clearTo; r++) for (let c = 1; c <= 5; c++) ws.getRow(r).getCell(c).value = null;
-      const overwritten = after.filter((b) => b.row >= start && b.row <= clearTo).map((b) => `${b.year}년 ${b.month}월`);
+      for (let r = start; r <= clearTo; r++) {
+        const row = ws.getRow(r);
+        for (let c = 1; c <= 5; c++) { const cell = row.getCell(c); cell.value = null; if (r > end) cell.style = {}; }
+        if (r > end) row.height = undefined;
+      }
       // 새 묶음 쓰기
       const headRow = ws.getRow(start); headRow.height = sty.headH;
       for (let c = 1; c <= 5; c++) headRow.getCell(c).style = clone(sty.head[c - 1]);
-      headRow.getCell(1).value = prev.text.replace(/^\d{4}\s*년\s*\d{1,2}\s*월/, `${year}년 ${month}월`);
+      headRow.getCell(1).value = modelText.replace(/^\d{4}\s*년\s*\d{1,2}\s*월/, `${year}년 ${month}월`);
       ws.mergeCells(`A${start}:E${start}`);
       const hr = ws.getRow(start + 1); hr.height = sty.hdrH;
       sty.hdr.forEach((h, i) => { hr.getCell(i + 1).value = h.v; hr.getCell(i + 1).style = clone(h.s); });
@@ -231,8 +242,7 @@
         const row = ws.getRow(start + 2 + i); row.height = sty.dataH;
         [i + 1, toDate(it.date), it.name, it.svc, it.detail].forEach((v, k) => { row.getCell(k + 1).value = v; row.getCell(k + 1).style = clone(sty.data[k]); });
       });
-      const old = overwritten.filter((t) => t !== `${year}년 ${month}월`);
-      if (old.length) notes.push(`${sheetName}: 지난해 남은 묶음(${old.join(', ')}) 자리에 ${month}월을 덮어썼어요`);
+      if (removed.length) notes.push(`${sheetName}: 지난해(작년 파일에서 남은) 묶음 ${removed.join(', ')}을(를) 지우고 ${month}월을 썼어요`);
       if (!items.length) notes.push(`${sheetName}: ${month}월 기록이 없어 빈 묶음만 만들었어요`);
     }
     // 의료지원 오른쪽 '정신과 진료' 표 (I~N)
