@@ -13,7 +13,7 @@
   };
 
   const state = {
-    personal: [], templates: [], templateIdx: 0, rosterFile: null, roster: null, logTpl: null, hwpWarn: false,
+    personal: [], templates: [], templateIdx: 0, rosterFile: null, roster: null, logTpl: null, hwpWarn: false, imgWarn: '',
     parsed: [], info: null, moves: [], result: null, result2: null,
     outreachFile: null, outreach: null, outreachEdits: {}, manualEdits: {}, aftercareFile: null, aftercare: null,
     usersFile: null, supportFile: null, prevAges: {}, ageEdits: {}, result3: null,
@@ -30,6 +30,7 @@
       if (Aftercare.isAftercareFileName(f.name)) { state.aftercareFile = f; continue; }   // 사후관리대장 (.hwp/.hwpx)
       if (/\.hwpx$/i.test(f.name)) { state.logTpl = f; state.hwpWarn = false; continue; }
       if (/\.hwp$/i.test(f.name)) { state.hwpWarn = true; continue; }
+      if (/\.(jpe?g|png|gif|webp|heic|bmp)$/i.test(f.name)) { state.imgWarn = f.name; continue; }   // 사진(근무표 등)은 바로 못 읽음 → 안내
       if (!/\.xlsx$/i.test(f.name) || f.name.startsWith('~$')) continue;
       if (Yearly.isUsersFile(f.name)) { state.usersFile = f; continue; }          // 연간 이용자현황
       if (Yearly.isSupportFile(f.name)) { state.supportFile = f; continue; }      // 연간 학업·자립·법률·의료지원
@@ -325,7 +326,9 @@
     const r = state.roster;
     const rosterStatus = !state.rosterFile ? badge('mute', '선택') : r?.error ? badge('bad', '읽지 못함')
       : badge('ok', `${Object.keys(r?.roster || {}).length}일`);
-    const rosterBody = !state.rosterFile ? '<span class="muted small">넣으면 일지 근무자 칸이 채워져요</span>'
+    const imgNote = state.imgWarn && !state.rosterFile
+      ? `<div class="warn small">사진(${esc(state.imgWarn)})은 이 페이지에서 바로 읽지 못해요. Claude에게 사진을 보내 「이 근무표를 엑셀로 바꿔줘」라고 하면 이 페이지가 읽는 양식의 「n월 근무표.xlsx」로 만들어 줘요.</div>` : '';
+    const rosterBody = !state.rosterFile ? '<span class="muted small">넣으면 일지 근무자 칸이 채워져요</span>' + imgNote
       : `${esc(state.rosterFile.name)} <button class="x" title="빼기" id="rmRoster">×</button>`
         + (r?.error ? `<div class="bad small">${esc(r.error)}</div>` : '')
         + (r?.holidays?.length ? `<div class="muted small">공휴일 ${r.holidays.join(', ')}일</div>` : '')
@@ -770,7 +773,7 @@
     dz.addEventListener('drop', (e) => { e.preventDefault(); dz.classList.remove('over'); addFiles([...e.dataTransfer.files]); });
     $('#fileInput').addEventListener('change', (e) => { addFiles([...e.target.files]); e.target.value = ''; });
     $('#clear').addEventListener('click', () => {
-      Object.assign(state, { personal: [], templates: [], parsed: [], info: null, moves: [], rosterFile: null, roster: null, logTpl: null, hwpWarn: false, outreachFile: null, outreach: null, outreachEdits: {}, manualEdits: {}, aftercareFile: null, aftercare: null, usersFile: null, supportFile: null, prevAges: {}, ageEdits: {} });
+      Object.assign(state, { personal: [], templates: [], parsed: [], info: null, moves: [], rosterFile: null, roster: null, logTpl: null, hwpWarn: false, imgWarn: '', outreachFile: null, outreach: null, outreachEdits: {}, manualEdits: {}, aftercareFile: null, aftercare: null, usersFile: null, supportFile: null, prevAges: {}, ageEdits: {} });
       state.yUsers = yearlyFile('users'); state.ySupport = yearlyFile('support');
       clearResults(); renderAll();
     });
