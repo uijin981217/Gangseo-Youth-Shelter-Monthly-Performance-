@@ -213,7 +213,7 @@
     if (my === eduSeq) renderEdu();
   }
   // 지난 기록·규칙으로 못 채웠고 아직 짧은 줄(등교지도, 전단지 아르바이트 등)만 '확인 필요'로 표시
-  const thin = (r, mem) => !mem[r.key] && !r.how && r.auto.replace(/\s/g, '').length <= 10;
+  const thin = (r, mem) => r.sheet !== '상담정서지원' && !mem[r.key] && !r.how && r.auto.replace(/\s/g, '').length <= 10;
   function renderEdu() {
     const box = $('#eduBox'); if (!box) return;
     const rows = state.eduRows || [];

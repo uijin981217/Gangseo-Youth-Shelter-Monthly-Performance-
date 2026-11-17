@@ -169,7 +169,7 @@
   // 지원 내역엔 선생님들이 정해진 말투로 자세히 써 왔음.
   //  · 매번 되풀이되는 활동(등교·레슨·아르바이트 출근) → 그 아이의 지난 기록에서 같은 활동 문구를 그대로
   //  · 한 번씩 있는 일(면접·원서접수·진료·약 제공) → 손글씨 말투 순서로 바꿔 씀
-  const POLISH = ['학업지원', '자립지원', '의료지원'];
+  const POLISH = ['학업지원', '자립지원', '의료지원', '상담정서지원'];
   const SUBJ = /^(국어|수학|영어|사회|과학|한국사|도덕|체육|기술가정|기가|미술|음악|역사|정보|전과목)$/;
   const SUBJ_G = /(국어|수학|영어|사회|과학|한국사|도덕|체육|기술가정|미술|음악)/g;
   const GENERIC = /^(수업|수강|참여|참석|지도|학습지도|및|등|제공|지원|지급|진료|아르바이트|출근지도|출근|건)$/;
@@ -222,6 +222,16 @@
     }
     return '';
   }
+  /** 그 아이의 이번 달 기록 제목에 나온 학교(학년·반 있으면 가장 자세한 것): 'OO중학교 3학년 2반' */
+  function schoolOf(name, sessions) {
+    let best = '';
+    for (const s of sessions) {
+      if (!(s.people || [s.name]).includes(name)) continue;
+      const m = String(s.title).match(/([가-힣A-Za-z]+(?:초등학교|중학교|고등학교|대학교))(\s*\d\s*학년(?:\s*\d+\s*반)?)?/);
+      if (m) { const v = cleanSp(`${m[1]}${m[2] || ''}`); if (v.length > best.length) best = v; }
+    }
+    return best;
+  }
   /** '장소(내용)' / '내용 - 장소' / '내용(장소)' → [내용, 장소] (장소 없으면 null) */
   function splitPlace(t, re) {
     let m = t.match(/^(.+?)\s*\(([^()]+)\)$/);
@@ -236,7 +246,9 @@
     const latest = (pred) => { for (let i = mine.length - 1; i >= 0; i--) if (pred(mine[i].detail)) return mine[i].detail; return ''; };
     if (/^등교(지도)?$/.test(base.replace(/\s/g, ''))) {                   // 등교지도 → 'OO학교 O학년 O반 등교'
       const d = latest((t) => /등교$/.test(t) && t.length > 3);
-      return d ? { text: d, how: 'history' } : { text: base, how: '' };
+      if (d) return { text: d, how: 'history' };
+      const sc = schoolOf(it.name, sessions);                            // 지난 기록이 없으면 이번 달 상담 제목의 학교·학년·반
+      return sc ? { text: `${sc} 등교`, how: 'rule' } : { text: base, how: '' };
     }
     const subs = base.replace(/^검정고시\s*(학습지도|학습|대비)?\s*[-–]?\s*/, '').split(/\s*[,·및]\s*|\s+/).filter(Boolean);
     if (/검정고시/.test(it.svc + it.title) && subs.length && subs.every((w) => SUBJ.test(w))) {   // 검정고시 학습지도_국어
@@ -328,8 +340,26 @@
     if (sp) t = `${sp[1]}(${sp[0]})`;
     return { text: t, how: t !== base ? 'rule' : '' };
   }
+  // 상담정서지원: 제목이 이미 상담 내용이라 말투만 손글씨처럼 (띄어쓰기·중복 낱말·자기 이름 머리말·담임선생님 학교)
+  function polishTalk(it, base, sessions) {
+    let t = ` ${base} `;
+    t = t.replace(/(\S+)\s+\1(?=\s)/g, '$1');                                       // '입소 입소' → '입소'
+    t = cleanSp(t);
+    t = t.replace(new RegExp(`^${it.name}\\s*-\\s*`), '');                          // '자기이름 - 내용' → '내용'
+    if (new RegExp(`^${it.name}\\s*담임`).test(t)) {                                 // '자기이름 담임선생님' → 'OO중학교 담임선생님'
+      const sc = schoolOf(it.name, sessions).replace(/\s*\d\s*학년.*$/, '');
+      t = t.replace(new RegExp(`^${it.name}\\s*`), sc ? `${sc} ` : '');
+    }
+    t = t.replace(/([가-힣])건$/, (m, c) => (/[사조물안용요]/.test(c) ? m : `${c} 건`))
+      .replace(/([가-힣])건(\s)/g, (m, c, s) => (/[사조물안용요]/.test(c) ? m : `${c} 건${s}`))
+      .replace(/해석상담/g, '해석 상담').replace(/학교생활/g, '학교 생활').replace(/쉼터생활/g, '쉼터 생활')
+      .replace(/정신과진료/g, '정신과 진료').replace(/진료예약/g, '진료 예약').replace(/폭력피해/g, '폭력 피해').replace(/입소생간/g, '입소생 간');
+    t = cleanSp(t);
+    return { text: t, how: t !== base ? 'rule' : '' };
+  }
   /** 기록 하나의 상세내역 → 손으로 쓴 것처럼. 반환 { text, how } (how: 'history'|'rule'|'' ) */
   function polishDetail(sheet, it, hist, sessions) {
+    if (sheet === '상담정서지원') return polishTalk(it, detailText(it.title), sessions);
     const base = detailText(it.title);
     const h = hist[sheet] || [];
     const mine = h.filter((x) => x.name === it.name && x.svc === it.svc);
